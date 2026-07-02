@@ -7,3 +7,37 @@
 /utils/__pycache__
 /model/backbones/__pycache__
 /model/clip/__pycache__
+
+
+
+# IDE
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pretrained models and checkpoints
+pretrained/
+weights/
+*.pth
+*.pt
+*.ckpt
+
+# Training outputs
+output/
+outputs/
+logs/
+runs/
+
+# Evaluation and temporary files
+*.npy
+*.log
+*.tmp
+dist_mat.npy
+Thumbs.db
+.DS_Store

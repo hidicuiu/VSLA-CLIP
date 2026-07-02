@@ -193,7 +193,10 @@ def make_model(cfg, num_class, camera_num, view_num):
 from model.clip import clip
 def load_clip_to_cpu(backbone_name, h_resolution, w_resolution, vision_stride_size, cfg):
     url = clip._MODELS[backbone_name]
-    model_path = clip._download(url)
+    model_path = clip._download(
+        url,
+        root=r"H:\WSY\ReID\VSLA-CLIP-master\pretrained\clip"
+    )
 
     try:
         # loading JIT archive
