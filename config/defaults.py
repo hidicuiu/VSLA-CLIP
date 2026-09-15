@@ -81,6 +81,10 @@ _C.MODEL.USE_LEARNABLE_PROMPT = True
 # adapter
 _C.MODEL.USE_ADAPTER = False
 _C.MODEL.USE_ADAPTER_LEN = 4
+# Ablation switches for the two components of the Video Set-Level Adapter.
+# They only take effect when USE_ADAPTER is True.
+_C.MODEL.USE_IFA = True
+_C.MODEL.USE_CFAA = True
 _C.MODEL.PBP_PROMPT_LEN = 1
 _C.MODEL.PBP_PROMPT_DEEP = 9
 

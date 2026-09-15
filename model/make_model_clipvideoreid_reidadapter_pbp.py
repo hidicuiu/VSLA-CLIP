@@ -215,7 +215,9 @@ def load_clip_to_cpu(backbone_name, h_resolution, w_resolution, vision_stride_si
         w_resolution,
         vision_stride_size,
         seq_len=cfg.DATALOADER.SEQ_LEN,
-        dat_type=cfg.MODEL.ADAPTER_TYPE
+        dat_type=cfg.MODEL.ADAPTER_TYPE,
+        use_ifa=cfg.MODEL.USE_IFA,
+        use_cfaa=cfg.MODEL.USE_CFAA
     )
 
     return model

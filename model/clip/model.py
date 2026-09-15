@@ -390,7 +390,9 @@ class ResidualAttentionBlock_DAT_CROSS_ATTENTION(nn.Module):
     这一版是在一个VIT layer中插入两个adapter，保持原有MLP并行的DAT不变，
     在multi-head attention后面增加一个fusion多帧的dat
     """
-    def __init__(self, d_model: int, n_head: int, seq_len: int, index: int, attn_mask: torch.Tensor = None):
+    def __init__(self, d_model: int, n_head: int, seq_len: int, index: int,
+                 attn_mask: torch.Tensor = None, use_ifa: bool = True,
+                 use_cfaa: bool = True):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -401,17 +403,26 @@ class ResidualAttentionBlock_DAT_CROSS_ATTENTION(nn.Module):
             ("c_proj", nn.Linear(d_model * 4, d_model))
         ]))
         self.alph = 256
+        self.use_ifa = use_ifa
+        self.use_cfaa = use_cfaa
 
-        self.dat = nn.Sequential(OrderedDict([  # intra-frame attention adapter
-            ("down", nn.Linear(d_model, self.alph)),
-            ("gelu", QuickGELU()),
-            ("up", nn.Linear(self.alph, d_model))
-        ]))
-        self.dat_cross = nn.Sequential(OrderedDict([  # inter-frame cross-attention adapter
-            ("down", nn.Linear(d_model, self.alph)),
-            ("temporal_block", TEMPORAL_BLOCK(self.alph, self.alph // 64, attn_mask, T=seq_len)),
-            ("up", nn.Linear(self.alph, d_model))
-        ]))
+        if self.use_ifa:
+            self.dat = nn.Sequential(OrderedDict([  # intra-frame feature adapter (IFA)
+                ("down", nn.Linear(d_model, self.alph)),
+                ("gelu", QuickGELU()),
+                ("up", nn.Linear(self.alph, d_model))
+            ]))
+        else:
+            self.dat = None
+
+        if self.use_cfaa:
+            self.dat_cross = nn.Sequential(OrderedDict([  # cross-frame attention adapter (CFAA)
+                ("down", nn.Linear(d_model, self.alph)),
+                ("temporal_block", TEMPORAL_BLOCK(self.alph, self.alph // 64, attn_mask, T=seq_len)),
+                ("up", nn.Linear(self.alph, d_model))
+            ]))
+        else:
+            self.dat_cross = None
         self.ln_2 = LayerNorm(d_model)
         self.attn_mask = attn_mask
         self.deep = index
@@ -424,6 +435,7 @@ class ResidualAttentionBlock_DAT_CROSS_ATTENTION(nn.Module):
         x, use_dat, cv_emb = input
 
         if use_dat:
+            cross_update = self.dat_cross(x) if self.use_cfaa else 0
             if cv_emb != None and self.deep < cv_emb.shape[0]:  # [deep l (b t) d]
                 cam_label = cv_emb[self.deep]  # [deep, length, dim] cv_emb [5, 2, 768]
                 l = cam_label.shape[0]
@@ -431,10 +443,11 @@ class ResidualAttentionBlock_DAT_CROSS_ATTENTION(nn.Module):
                 x_pbp = torch.cat([x_n, cam_label], dim=0)
                 x_pbp_out = self.attention(x_pbp)
                 x_pbp_out = x_pbp_out[:-l]
-                x = x + x_pbp_out + self.dat_cross(x)
+                x = x + x_pbp_out + cross_update
             else:
-                x = x + self.attention(self.ln_1(x)) + self.dat_cross(x)
-            x = x + self.mlp(self.ln_2(x)) + self.dat(x)
+                x = x + self.attention(self.ln_1(x)) + cross_update
+            intra_update = self.dat(x) if self.use_ifa else 0
+            x = x + self.mlp(self.ln_2(x)) + intra_update
         else:
             x = x + self.attention(self.ln_1(x))
             x = x + self.mlp(self.ln_2(x))
@@ -453,12 +466,14 @@ class Transformer(nn.Module):
 
 
 class Transformer_DAT_PT(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, seq_len: int, attn_mask: torch.Tensor = None, dat_type='dat'):
+    def __init__(self, width: int, layers: int, heads: int, seq_len: int,
+                 attn_mask: torch.Tensor = None, dat_type='dat', use_ifa: bool = True,
+                 use_cfaa: bool = True):
         super().__init__()
         self.width = width
         self.layers = layers
         self.resblocks = nn.Sequential(
-            *[ResidualAttentionBlock_DAT_CROSS_ATTENTION(width, heads, seq_len, depth, attn_mask) for depth
+            *[ResidualAttentionBlock_DAT_CROSS_ATTENTION(width, heads, seq_len, depth, attn_mask, use_ifa, use_cfaa) for depth
               in
               range(layers)])
 
@@ -512,7 +527,8 @@ class VisionTransformer(nn.Module):
 
 class VisionTransformer_DAT_PT(nn.Module):
     def __init__(self, h_resolution: int, w_resolution: int, patch_size: int, stride_size: int, width: int, layers: int,
-                 heads: int, output_dim: int, seq_len: int, dat_type: str):
+                 heads: int, output_dim: int, seq_len: int, dat_type: str,
+                 use_ifa: bool = True, use_cfaa: bool = True):
         super().__init__()
         self.h_resolution = h_resolution
         self.w_resolution = w_resolution
@@ -525,7 +541,9 @@ class VisionTransformer_DAT_PT(nn.Module):
         self.positional_embedding = nn.Parameter(scale * torch.randn(h_resolution * w_resolution + 1, width))
         self.ln_pre = LayerNorm(width)
         self.seq_len = seq_len
-        self.transformer = Transformer_DAT_PT(width, layers, heads, seq_len, dat_type=dat_type)
+        self.transformer = Transformer_DAT_PT(
+            width, layers, heads, seq_len, dat_type=dat_type,
+            use_ifa=use_ifa, use_cfaa=use_cfaa)
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
@@ -628,7 +646,9 @@ class CLIP(nn.Module):
                  h_resolution: int, 
                  w_resolution: int,
                  seq_len: int,
-                 dat_type: str
+                 dat_type: str,
+                 use_ifa: bool = True,
+                 use_cfaa: bool = True
                  ):
         super().__init__()
 
@@ -655,7 +675,9 @@ class CLIP(nn.Module):
                 heads=vision_heads,
                 output_dim=embed_dim,
                 seq_len=seq_len,
-                dat_type=dat_type
+                dat_type=dat_type,
+                use_ifa=use_ifa,
+                use_cfaa=use_cfaa
             )
             
         self.transformer = Transformer(
@@ -773,7 +795,8 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict, h_resolution: int, w_resolution: int, vision_stride_size: int, seq_len=4, dat_type='dat'):
+def build_model(state_dict: dict, h_resolution: int, w_resolution: int, vision_stride_size: int, seq_len=4,
+                dat_type='dat', use_ifa=True, use_cfaa=True):
     vit = "visual.proj" in state_dict
 
     if vit:
@@ -802,7 +825,7 @@ def build_model(state_dict: dict, h_resolution: int, w_resolution: int, vision_s
         embed_dim,
         image_resolution, vision_layers, vision_width, vision_patch_size, vision_stride_size,
         context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,
-        h_resolution, w_resolution, seq_len, dat_type
+        h_resolution, w_resolution, seq_len, dat_type, use_ifa, use_cfaa
     )
     if vit:
         state_dict["visual.positional_embedding"] = resize_pos_embed(state_dict["visual.positional_embedding"], model.visual.positional_embedding, h_resolution, w_resolution)
