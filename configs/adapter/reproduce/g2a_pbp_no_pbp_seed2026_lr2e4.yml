@@ -1,3 +1,4 @@
+# PBP stability: PBP disabled, seed 2026
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -11,16 +12,17 @@ MODEL:
   I2T_WEIGHT: 1.0
   T2I_WEIGHT: 1.0
   VIFI_WEIGHT: 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
+  STAGE1_WEIGHT: 'output/G2A/vifi_pbp_final_lr2e4/ViT-B-16_stage1_120.pth'
   USE_VIFI_WEIGHT: True
   PROMPT_LEN: 8
   USE_LEARNABLE_PROMPT: True
-  PBP_CAMERA: True
+  PBP_CAMERA: False
   PBP_VIEW: False
   PBP_PROMPT_DEEP: 3
   PBP_PROMPT_LEN: 16
   USE_ADAPTER: True
   USE_IFA: True
-  USE_CFAA: False
+  USE_CFAA: True
   ADAPTER_TYPE: 'dat_and_cross'
 
 INPUT:
@@ -37,9 +39,10 @@ DATALOADER:
   NUM_INSTANCE: 4
   NUM_WORKERS: 8
   SEQ_LEN: 8
+  PID_SAMPLES_PER_EPOCH: 0
 
 SOLVER:
-  SEED: 1234
+  SEED: 2026
   STAGE1:
     IMS_PER_BATCH: 32
     OPTIMIZER_NAME: 'Adam'
@@ -75,7 +78,7 @@ TEST:
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: ''
+  WEIGHT: 'output/ablation/PBP_no_pbp_seed2026_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
@@ -84,4 +87,5 @@ TEST:
 DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/G2A/vifi_pbp_ablate_no_cfaa_lr2e4'
+OUTPUT_DIR: 'output/reproduce/vifi_no_pbp_seed2026_lr2e4'
+

@@ -80,4 +80,4 @@ TEST:
 DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/G2A/clip_retrain'
+OUTPUT_DIR: 'output/reproduce/clip_retrain'

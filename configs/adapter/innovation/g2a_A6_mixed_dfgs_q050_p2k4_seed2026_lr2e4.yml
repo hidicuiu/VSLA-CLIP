@@ -1,3 +1,4 @@
+# A6 seed-stability run: mixed DFGS-T (q=0.50) with cross-camera K4 tracklet sampling.
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -5,15 +6,16 @@ MODEL:
   IF_WITH_CENTER: 'no'
   NAME: 'ViT-B-16'
   STRIDE_SIZE: [16, 16]
-  ID_LOSS_WEIGHT : 0.25
-  TRIPLET_LOSS_WEIGHT : 1.0
-  I2T_LOSS_WEIGHT : 1.0
+  ID_LOSS_WEIGHT: 0.25
+  TRIPLET_LOSS_WEIGHT: 1.0
+  I2T_LOSS_WEIGHT: 1.0
   I2T_WEIGHT: 1.0
   T2I_WEIGHT: 1.0
-  VIFI_WEIGHT : 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
-  USE_VIFI_WEIGHT : True
-  PROMPT_LEN : 8 
-  USE_LEARNABLE_PROMPT : True
+  VIFI_WEIGHT: 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
+  STAGE1_WEIGHT: 'output/reproduce/vifi_pbp_final_lr2e4/ViT-B-16_stage1_120.pth'
+  USE_VIFI_WEIGHT: True
+  PROMPT_LEN: 8
+  USE_LEARNABLE_PROMPT: True
   PBP_CAMERA: True
   PBP_VIEW: False
   PBP_PROMPT_DEEP: 3
@@ -24,22 +26,26 @@ MODEL:
 INPUT:
   SIZE_TRAIN: [256, 128]
   SIZE_TEST: [256, 128]
-  PROB: 0.5 # random horizontal flip
-  RE_PROB: 0.5 # random erasing
+  PROB: 0.5
+  RE_PROB: 0.5
   PADDING: 10
   PIXEL_MEAN: [0.485, 0.456, 0.406]
   PIXEL_STD: [0.229, 0.224, 0.225]
 
 DATALOADER:
-  SAMPLER: 'softmax_triplet'
+  SAMPLER: 'mixed_dfgs'
   NUM_INSTANCE: 4
   NUM_WORKERS: 8
   SEQ_LEN: 8
+  PID_SAMPLES_PER_EPOCH: 4
+  DFGS_GRAPH: 'configs/adapter/innovation/g2a_dfgs_text_graph_m2_k10.json'
+  DFGS_PROBABILITY: 0.50
 
 SOLVER:
+  SEED: 2026
   STAGE1:
     IMS_PER_BATCH: 32
-    OPTIMIZER_NAME: "Adam"
+    OPTIMIZER_NAME: 'Adam'
     BASE_LR: 0.00035
     WARMUP_LR_INIT: 0.00001
     LR_MIN: 1e-6
@@ -50,15 +56,14 @@ SOLVER:
     CHECKPOINT_PERIOD: 120
     LOG_PERIOD: 10
     WARMUP_EPOCHS: 5
-
   STAGE2:
     IMS_PER_BATCH: 8
-    OPTIMIZER_NAME: "Adam"
+    OPTIMIZER_NAME: 'Adam'
     BASE_LR: 0.0002
     WARMUP_METHOD: 'linear'
     WARMUP_ITERS: 10
     WARMUP_FACTOR: 0.1
-    WEIGHT_DECAY:  0.00025
+    WEIGHT_DECAY: 0.00025
     WEIGHT_DECAY_BIAS: 0.0001
     LARGE_FC_LR: False
     MAX_EPOCHS: 120
@@ -66,7 +71,6 @@ SOLVER:
     LOG_PERIOD: 50
     EVAL_PERIOD: 10
     BIAS_LR_FACTOR: 2
-
     STEPS: [60, 90]
     GAMMA: 0.1
 
@@ -74,7 +78,7 @@ TEST:
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: ''
+  WEIGHT: 'output/innovation/A6_mixed_dfgs_q050_p2k4_seed2026_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
@@ -83,4 +87,5 @@ TEST:
 DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/G2A/vifi_pbp_final_lr2e4'
+
+OUTPUT_DIR: 'output/innovation/A6_mixed_dfgs_q050_p2k4_seed2026_lr2e4'

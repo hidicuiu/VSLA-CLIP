@@ -40,7 +40,7 @@ if __name__ == '__main__':
     if args.config_file != "":
         cfg.merge_from_file(args.config_file)
 
-    cfg.stage1weight = args.stage1weight
+    cfg.stage1weight = args.stage1weight if args.stage1weight else cfg.MODEL.STAGE1_WEIGHT
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 

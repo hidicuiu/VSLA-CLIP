@@ -1,3 +1,4 @@
+# B1: random identity sampling with P4K2
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -10,11 +11,14 @@ MODEL:
   I2T_LOSS_WEIGHT : 1.0
   I2T_WEIGHT: 1.0
   T2I_WEIGHT: 1.0
-  VIFI_WEIGHT : ''
-  USE_VIFI_WEIGHT : False
+  VIFI_WEIGHT : 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
+  USE_VIFI_WEIGHT : True
   PROMPT_LEN : 8 
   USE_LEARNABLE_PROMPT : True
-  PBP_CAMERA: False
+  PBP_CAMERA: True
+  PBP_VIEW: False
+  PBP_PROMPT_DEEP: 3
+  PBP_PROMPT_LEN: 16
   USE_ADAPTER: True
   ADAPTER_TYPE: 'dat_and_cross'
 
@@ -29,13 +33,16 @@ INPUT:
 
 DATALOADER:
   SAMPLER: 'softmax_triplet'
-  NUM_INSTANCE: 4
+  NUM_INSTANCE: 2
   NUM_WORKERS: 8
   SEQ_LEN: 8
+  PID_SAMPLES_PER_EPOCH: 4
+  DFGS_GRAPH: 'configs/adapter/innovation/g2a_dfgs_text_graph_m2_k10.json'
 
 SOLVER:
+  SEED: 2025
   STAGE1:
-    IMS_PER_BATCH: 64
+    IMS_PER_BATCH: 32
     OPTIMIZER_NAME: "Adam"
     BASE_LR: 0.00035
     WARMUP_LR_INIT: 0.00001
@@ -49,7 +56,7 @@ SOLVER:
     WARMUP_EPOCHS: 5
 
   STAGE2:
-    IMS_PER_BATCH: 32
+    IMS_PER_BATCH: 8
     OPTIMIZER_NAME: "Adam"
     BASE_LR: 0.0002
     WARMUP_METHOD: 'linear'
@@ -58,8 +65,8 @@ SOLVER:
     WEIGHT_DECAY:  0.00025
     WEIGHT_DECAY_BIAS: 0.0001
     LARGE_FC_LR: False
-    MAX_EPOCHS: 1200
-    CHECKPOINT_PERIOD: 1200
+    MAX_EPOCHS: 120
+    CHECKPOINT_PERIOD: 120
     LOG_PERIOD: 50
     EVAL_PERIOD: 10
     BIAS_LR_FACTOR: 2
@@ -71,7 +78,7 @@ TEST:
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: ''
+  WEIGHT: 'output/ablation/B1_random_p4k2_seed2025_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
@@ -80,4 +87,4 @@ TEST:
 DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/G2A/official_test'
+OUTPUT_DIR: 'output/innovation/A0_random_p4k2_seed2025_lr2e4'

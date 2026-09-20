@@ -54,7 +54,7 @@ SOLVER:
   STAGE2:
     IMS_PER_BATCH: 8
     OPTIMIZER_NAME: "Adam"
-    BASE_LR: 0.0001
+    BASE_LR: 0.0002
     WARMUP_METHOD: 'linear'
     WARMUP_ITERS: 10
     WARMUP_FACTOR: 0.1
@@ -83,4 +83,4 @@ TEST:
 DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/G2A/vifi_pbp_baseline_lr1e4_seed1234'
+OUTPUT_DIR: 'output/reproduce/vifi_pbp_final_lr2e4'

@@ -25,6 +25,9 @@ _C.MODEL.NAME = 'resnet50'
 _C.MODEL.LAST_STRIDE = 1
 # Path to pretrained model of backbone
 _C.MODEL.PRETRAIN_PATH = ''
+# Optional stage-1 checkpoint used by train_reidadapter.py. A non-empty
+# --stage1weight command-line argument still takes precedence.
+_C.MODEL.STAGE1_WEIGHT = ''
 
 _C.MODEL.FUSION_HEAD_NUM = 12
 _C.MODEL.FUSION_LAYER_NUM = 2
@@ -128,6 +131,9 @@ _C.DATALOADER.SAMPLER = 'softmax'
 # Number of instance for one batch
 _C.DATALOADER.NUM_INSTANCE = 16
 _C.DATALOADER.SEQ_LEN = 4
+_C.DATALOADER.DFGS_GRAPH = ''
+_C.DATALOADER.DFGS_PROBABILITY = 1.0
+_C.DATALOADER.PID_SAMPLES_PER_EPOCH = 0
 
 # ---------------------------------------------------------------------------- #
 # Solver

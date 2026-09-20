@@ -1,7 +1,7 @@
 from datasets import data_manager
 from torch.utils.data import DataLoader
 
-from datasets.sampler import RandomIdentitySampler_Video
+from datasets.sampler import RandomIdentitySampler_Video, IdentityBatchSamplerVideo
 from dataset_transformer import temporal_transforms as TT, spatial_transforms as ST
 from datasets.video_loader import VideoDataset, VideoDatasetInfer
 
@@ -40,12 +40,13 @@ def make_dataloader(cfg):
         batch_size=cfg.SOLVER.STAGE1.IMS_PER_BATCH, num_workers=num_workers,
         pin_memory=True, drop_last=True)
 
+    stage2_sampler = _make_stage2_sampler(cfg, dataset.train)
     train_loader_stage2 = DataLoader(
         VideoDataset(
             dataset.train,
             spatial_transform=spatial_transform_train_stage2,
             temporal_transform=temporal_transform_train),
-        sampler=RandomIdentitySampler_Video(dataset.train, num_instances=cfg.DATALOADER.NUM_INSTANCE),
+        sampler=stage2_sampler,
         batch_size=cfg.SOLVER.STAGE2.IMS_PER_BATCH, num_workers=num_workers,
         pin_memory=True, drop_last=True)
 
@@ -85,3 +86,37 @@ def make_dataloader(cfg):
             num_classes,
             num_query,
             camera_num)
+
+
+def _make_stage2_sampler(cfg, train_data):
+    sampler_name = str(cfg.DATALOADER.SAMPLER).lower()
+    if sampler_name == 'softmax_triplet':
+        return IdentityBatchSamplerVideo(
+            train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
+            num_instances=cfg.DATALOADER.NUM_INSTANCE,
+            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH)
+    if sampler_name == 'cross_camera':
+        return IdentityBatchSamplerVideo(
+            train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
+            num_instances=cfg.DATALOADER.NUM_INSTANCE, cross_camera=True,
+            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH)
+    if sampler_name in ('dfgs', 'dfgs_cross_camera', 'mixed_dfgs',
+                        'mixed_dfgs_baseline_k4'):
+        import json
+        graph_path = cfg.DATALOADER.DFGS_GRAPH
+        if not graph_path:
+            raise ValueError('DATALOADER.DFGS_GRAPH is required for DFGS sampling')
+        with open(graph_path, 'r') as graph_file:
+            raw_graph = json.load(graph_file)
+        graph = {int(pid): [int(n) for n in neighbors] for pid, neighbors in raw_graph.items()}
+        return IdentityBatchSamplerVideo(
+            train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
+            num_instances=cfg.DATALOADER.NUM_INSTANCE,
+            cross_camera=sampler_name == 'dfgs_cross_camera',
+            neighbor_graph=graph,
+            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH,
+            hard_negative_probability=(cfg.DATALOADER.DFGS_PROBABILITY
+                                       if sampler_name in ('mixed_dfgs', 'mixed_dfgs_baseline_k4')
+                                       else 1.0),
+            baseline_replacement_sampling=sampler_name == 'mixed_dfgs_baseline_k4')
+    raise ValueError('Unknown video sampler: {}'.format(cfg.DATALOADER.SAMPLER))
