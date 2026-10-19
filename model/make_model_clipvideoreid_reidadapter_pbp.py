@@ -116,20 +116,25 @@ class build_transformer(nn.Module):
 
 
 
-    def forward(self, x = None, label=None, get_image = False, get_text = False, cam_label= None, view_label=None):
+    def forward(self, x = None, label=None, get_image = False, get_text = False,
+                get_frame_image=False, cam_label= None, view_label=None):
         if get_text == True:
             prompts = self.prompt_learner(label) 
             text_features = self.text_encoder(prompts, self.prompt_learner.tokenized_prompts)
             return text_features
 
         batch = x.shape[0]
-        if get_image == True:
+        if get_image == True or get_frame_image == True:
             image_features_last, image_features, image_features_proj = self.image_encoder(x, use_dat=False)
             if self.model_name == 'RN50':
+                if get_frame_image:
+                    raise NotImplementedError('Frame features are implemented for ViT-B-16 only')
                 return image_features_proj[0]
             elif self.model_name == 'ViT-B-16':
                 img_feature_proj = image_features_proj[:, 0]
                 img_feature_proj = einops.rearrange(img_feature_proj, '(b t) d -> b t d', b=batch)
+                if get_frame_image:
+                    return img_feature_proj
                 img_feature_proj = torch.mean(img_feature_proj, dim=1)
                 return img_feature_proj
 

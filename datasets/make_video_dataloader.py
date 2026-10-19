@@ -2,6 +2,7 @@ from datasets import data_manager
 from torch.utils.data import DataLoader
 
 from datasets.sampler import RandomIdentitySampler_Video, IdentityBatchSamplerVideo
+from datasets.reliable_positive import load_rhp_graph
 from dataset_transformer import temporal_transforms as TT, spatial_transforms as ST
 from datasets.video_loader import VideoDataset, VideoDatasetInfer
 
@@ -91,28 +92,39 @@ def make_dataloader(cfg):
 def _make_stage2_sampler(cfg, train_data):
     sampler_name = str(cfg.DATALOADER.SAMPLER).lower()
     if sampler_name == 'softmax_triplet':
+        # Reproduction path: preserve the sampler used by the original paper.
+        # In particular, identities with fewer than K tracklets draw all K
+        # entries with replacement instead of retaining every real tracklet.
+        return RandomIdentitySampler_Video(
+            train_data, num_instances=cfg.DATALOADER.NUM_INSTANCE)
+    if sampler_name == 'reliable_hard_positive':
+        graph_path = cfg.DATALOADER.RHP_GRAPH
+        if not graph_path:
+            raise ValueError('DATALOADER.RHP_GRAPH is required for RHP sampling')
+        rhp_graph, _ = load_rhp_graph(graph_path, train_data)
         return IdentityBatchSamplerVideo(
             train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
             num_instances=cfg.DATALOADER.NUM_INSTANCE,
-            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH)
-    if sampler_name == 'cross_camera':
-        return IdentityBatchSamplerVideo(
-            train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
-            num_instances=cfg.DATALOADER.NUM_INSTANCE, cross_camera=True,
-            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH)
-    if sampler_name in ('dfgs', 'dfgs_cross_camera', 'mixed_dfgs',
+            reliable_positive_graph=rhp_graph,
+            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH,
+            baseline_replacement_sampling=True)
+    if sampler_name in ('dfgs', 'mixed_dfgs',
                         'mixed_dfgs_baseline_k4'):
         import json
         graph_path = cfg.DATALOADER.DFGS_GRAPH
-        if not graph_path:
+        dynamic_enabled = bool(cfg.DATALOADER.DYNAMIC_DFGS_ENABLED)
+        if not graph_path and not dynamic_enabled:
             raise ValueError('DATALOADER.DFGS_GRAPH is required for DFGS sampling')
-        with open(graph_path, 'r') as graph_file:
-            raw_graph = json.load(graph_file)
-        graph = {int(pid): [int(n) for n in neighbors] for pid, neighbors in raw_graph.items()}
+        if graph_path:
+            with open(graph_path, 'r') as graph_file:
+                raw_graph = json.load(graph_file)
+            graph = {int(pid): [int(n) for n in neighbors] for pid, neighbors in raw_graph.items()}
+        else:
+            # The graph is populated immediately before dynamic Stage-2 epoch 1.
+            graph = {}
         return IdentityBatchSamplerVideo(
             train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
             num_instances=cfg.DATALOADER.NUM_INSTANCE,
-            cross_camera=sampler_name == 'dfgs_cross_camera',
             neighbor_graph=graph,
             samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH,
             hard_negative_probability=(cfg.DATALOADER.DFGS_PROBABILITY

@@ -179,14 +179,15 @@ class RandomIdentitySampler_Video(Sampler):
 
 
 class IdentityBatchSamplerVideo(Sampler):
-    """PK sampler with optional cross-camera positives and DFGS PID batches.
+    """PK sampler with optional RHP tracklets and DFGS PID batches.
 
     DFGS changes which identities share a batch. Batch-hard triplet loss still
     selects the hardest positive and negative tracklets inside that batch.
     """
 
     def __init__(self, data_source, batch_size, num_instances=2,
-                 cross_camera=False, neighbor_graph=None, samples_per_pid=0,
+                 neighbor_graph=None, reliable_positive_graph=None,
+                 samples_per_pid=0,
                  hard_negative_probability=1.0,
                  baseline_replacement_sampling=False):
         if batch_size % num_instances != 0:
@@ -195,18 +196,19 @@ class IdentityBatchSamplerVideo(Sampler):
         self.batch_size = batch_size
         self.num_instances = num_instances
         self.num_pids_per_batch = batch_size // num_instances
-        self.cross_camera = cross_camera
         self.neighbor_graph = neighbor_graph
+        self.low_candidate_ids = set()
+        self.low_candidate_weight = 1.0
+        self.soft_sampling_stats = {}
+        self.reliable_positive_graph = reliable_positive_graph
         self.hard_negative_probability = hard_negative_probability
         self.baseline_replacement_sampling = baseline_replacement_sampling
         self.samples_per_pid = samples_per_pid
         self.index_dic = defaultdict(list)
-        self.camera_dic = defaultdict(lambda: defaultdict(list))
 
-        for index, (_, pid, camid) in enumerate(data_source):
-            pid, camid = int(pid), int(camid)
+        for index, (_, pid, _) in enumerate(data_source):
+            pid = int(pid)
             self.index_dic[pid].append(index)
-            self.camera_dic[pid][camid].append(index)
         self.pids = list(self.index_dic.keys())
 
         self.num_chunks = {}
@@ -214,6 +216,54 @@ class IdentityBatchSamplerVideo(Sampler):
             target_samples = self.samples_per_pid if self.samples_per_pid > 0 else len(idxs)
             self.num_chunks[pid] = max(1, target_samples // self.num_instances)
         self.length = (sum(self.num_chunks.values()) // self.num_pids_per_batch) * self.batch_size
+
+    def update_neighbor_graph(self, neighbor_graph, low_candidate_ids=None,
+                              low_candidate_weight=1.0):
+        """Replace the identity graph used by subsequent DataLoader epochs."""
+        if neighbor_graph is None:
+            raise ValueError("neighbor_graph must not be None")
+        known = set(self.pids)
+        normalized = {}
+        for raw_pid, raw_neighbors in neighbor_graph.items():
+            pid = int(raw_pid)
+            if pid not in known:
+                raise ValueError("DFGS graph contains unknown identity {}".format(pid))
+            neighbors = [int(candidate) for candidate in raw_neighbors]
+            invalid = [candidate for candidate in neighbors
+                       if candidate not in known or candidate == pid]
+            if invalid:
+                raise ValueError(
+                    "DFGS graph for identity {} has invalid neighbors {}"
+                    .format(pid, invalid[:5]))
+            normalized[pid] = neighbors
+        missing = known.difference(normalized)
+        if missing:
+            raise ValueError(
+                "DFGS graph is missing {} identities, including {}"
+                .format(len(missing), sorted(missing)[:5]))
+        self.neighbor_graph = normalized
+        if not 0.0 < low_candidate_weight <= 1.0:
+            raise ValueError("low_candidate_weight must be in (0, 1]")
+        low_ids = set() if low_candidate_ids is None else {
+            int(pid) for pid in low_candidate_ids}
+        if not low_ids.issubset(known):
+            raise ValueError("low_candidate_ids contains unknown identities")
+        self.low_candidate_ids = low_ids
+        self.low_candidate_weight = low_candidate_weight
+
+    def _neighbor_order(self, neighbors):
+        remaining = list(neighbors)
+        if not self.low_candidate_ids:
+            random.shuffle(remaining)
+            return remaining
+        ordered = []
+        while remaining:
+            weights = [self.low_candidate_weight if pid in self.low_candidate_ids
+                       else 1.0 for pid in remaining]
+            chosen = random.choices(remaining, weights=weights, k=1)[0]
+            remaining.remove(chosen)
+            ordered.append(chosen)
+        return ordered
 
     def _random_chunks(self, pid):
         idxs = copy.deepcopy(self.index_dic[pid])
@@ -229,33 +279,34 @@ class IdentityBatchSamplerVideo(Sampler):
         random.shuffle(idxs)
         return [idxs[i:i + self.num_instances] for i in range(0, needed, self.num_instances)]
 
-    def _cross_camera_chunks(self, pid):
-        # For the B2/B4 setting K=2, every possible chunk contains one
-        # tracklet from each camera. Fall back to random PK for single-camera IDs.
-        cameras = [cam for cam, idxs in self.camera_dic[pid].items() if idxs]
-        if self.num_instances != 2 or len(cameras) < 2:
+    def _reliable_positive_chunks(self, pid):
+        """Choose a random anchor and its best valid reliable hard positive."""
+        indices = self.index_dic[pid]
+        if self.num_instances < 2 or len(indices) < 2:
             return self._random_chunks(pid)
-        pools = {cam: copy.deepcopy(self.camera_dic[pid][cam]) for cam in cameras}
-        for values in pools.values():
-            random.shuffle(values)
-        cursors = defaultdict(int)
         chunks = []
-        for chunk_idx in range(self.num_chunks[pid]):
-            cam_a = cameras[chunk_idx % len(cameras)]
-            cam_b = cameras[(chunk_idx + 1) % len(cameras)]
-            if cam_a == cam_b:
-                cam_b = cameras[(chunk_idx + 1) % len(cameras)]
-            a_values, b_values = pools[cam_a], pools[cam_b]
-            a = a_values[cursors[cam_a] % len(a_values)]
-            b = b_values[cursors[cam_b] % len(b_values)]
-            cursors[cam_a] += 1
-            cursors[cam_b] += 1
-            chunks.append([a, b])
+        valid_indices = set(indices)
+        for _ in range(self.num_chunks[pid]):
+            anchor = random.choice(indices)
+            ranked = self.reliable_positive_graph.get(anchor, ())
+            positive = next((candidate for candidate in ranked
+                             if candidate in valid_indices and candidate != anchor), None)
+            if positive is None:
+                positive = random.choice([index for index in indices if index != anchor])
+            chunk = [anchor, positive]
+            remaining = self.num_instances - 2
+            if remaining > 0:
+                chunk.extend(np.random.choice(
+                    indices, size=remaining, replace=True).tolist())
+            random.shuffle(chunk)
+            chunks.append(chunk)
         return chunks
 
     def _make_chunks(self):
         return {
-            pid: (self._cross_camera_chunks(pid) if self.cross_camera else self._random_chunks(pid))
+            pid: (self._reliable_positive_chunks(pid)
+                  if self.reliable_positive_graph is not None
+                  else self._random_chunks(pid))
             for pid in self.pids
         }
 
@@ -271,8 +322,7 @@ class IdentityBatchSamplerVideo(Sampler):
                 continue
             visited.add(pid)
             selected.append(pid)
-            neighbors = list(self.neighbor_graph.get(pid, ()))
-            random.shuffle(neighbors)
+            neighbors = self._neighbor_order(self.neighbor_graph.get(pid, ()))
             stack.extend(reversed([n for n in neighbors if n in available and n not in visited]))
         if len(selected) < self.num_pids_per_batch:
             remaining = list(available.difference(selected))
@@ -280,6 +330,10 @@ class IdentityBatchSamplerVideo(Sampler):
         return selected
 
     def __iter__(self):
+        self.soft_sampling_stats = {
+            "graph_batches": 0, "low_neighbor_batches": 0,
+            "random_batches": 0,
+        }
         chunks = self._make_chunks()
         for pid_chunks in chunks.values():
             random.shuffle(pid_chunks)
@@ -289,8 +343,13 @@ class IdentityBatchSamplerVideo(Sampler):
             if (self.neighbor_graph is None or
                     random.random() >= self.hard_negative_probability):
                 selected = self._random_pid_batch(available)
+                self.soft_sampling_stats["random_batches"] += 1
             else:
                 selected = self._dfgs_pid_batch(available)
+                self.soft_sampling_stats["graph_batches"] += 1
+                if (len(selected) == 2 and selected[1] in self.low_candidate_ids
+                        and selected[1] in self.neighbor_graph.get(selected[0], ())):
+                    self.soft_sampling_stats["low_neighbor_batches"] += 1
             for pid in selected:
                 final_idxs.extend(chunks[pid].pop())
                 if not chunks[pid]:

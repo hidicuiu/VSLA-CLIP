@@ -29,9 +29,9 @@ from scipy.io import loadmat
 
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_ROOT = APP_DIR.parent / "G2A-VReID"
-CONFIG_PATH = APP_DIR / "configs" / "adapter" / "vit_adapter_g2a_vifi_pbp_no_pbp_lr2e4.yml"
-WEIGHT_PATH = APP_DIR / "output" / "G2A" / "vifi_pbp_ablate_no_pbp_lr2e4" / "ViT-B-16_mAP_best.pth"
+DATA_ROOT = APP_DIR.parent / "datas" / "G2A-VReID"
+CONFIG_PATH = APP_DIR / "configs" / "adapter" / "reproduce"/ "g2a_vifi_no_pbp_retrain_seed1234_lr2e4.yml"
+WEIGHT_PATH = APP_DIR / "output" / "reproduce" / "vifi_no_pbp_baseline_seed1234_lr2e4_retrain" / "ViT-B-16_mAP_best.pth"
 MODEL_NAME = "VSLA-CLIP · ViT-B/16 · Seed 1234"
 
 PLATFORM_NAMES = {0: "地面摄像机", 1: "无人机"}

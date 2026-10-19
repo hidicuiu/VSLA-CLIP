@@ -12,6 +12,7 @@ from loss.supcontrast import SupConLoss
 import einops
 
 from utils.test_video_reid import test, _eval_format_logger
+from datasets.dynamic_dfgs import refresh_dynamic_dfgs_graph, should_refresh_graph
 
 
 def do_train_stage2(cfg,
@@ -30,6 +31,7 @@ def do_train_stage2(cfg,
     log_period = cfg.SOLVER.STAGE2.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.STAGE2.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.STAGE2.EVAL_PERIOD
+    final_checkpoint_only = cfg.SOLVER.STAGE2.FINAL_CHECKPOINT_ONLY
     instance = cfg.DATALOADER.NUM_INSTANCE
 
     device = "cuda"
@@ -101,6 +103,12 @@ def do_train_stage2(cfg,
 
         scheduler.step()
 
+        if (cfg.DATALOADER.DYNAMIC_DFGS_ENABLED and
+                should_refresh_graph(
+                    epoch, cfg.DATALOADER.DYNAMIC_DFGS_UPDATE_PERIOD)):
+            refresh_dynamic_dfgs_graph(
+                cfg, model, train_loader_stage2.sampler, epoch, logger)
+
         model.train()
         for n_iter, (img, vid, target_cam) in enumerate(train_loader_stage2):
             # print(model.prompt_learner.text_shared_prompts[0])
@@ -162,8 +170,13 @@ def do_train_stage2(cfg,
         else:
             logger.info("Epoch {} done. Time per batch: {:.3f}[s] Speed: {:.1f}[samples/s]"
                     .format(epoch, time_per_batch, train_loader_stage2.batch_size / time_per_batch))
+        if cfg.DATALOADER.DYNAMIC_DFGS_SOFT_NEGATIVES:
+            stats = train_loader_stage2.sampler.soft_sampling_stats
+            logger.info("Soft negative sampling epoch %d: graph_batches=%d, low_neighbor_batches=%d, random_batches=%d",
+                        epoch, stats["graph_batches"], stats["low_neighbor_batches"],
+                        stats["random_batches"])
 
-        if epoch % checkpoint_period == 0:
+        if epoch % checkpoint_period == 0 or (final_checkpoint_only and epoch == epochs):
             if cfg.MODEL.DIST_TRAIN:
                 if dist.get_rank() == 0:
                     torch.save(model.state_dict(),
@@ -172,18 +185,19 @@ def do_train_stage2(cfg,
                 torch.save(model.state_dict(),
                            os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
 
-        if epoch % eval_period == 0:
+        if ((not final_checkpoint_only and epoch % eval_period == 0) or
+                (final_checkpoint_only and epoch == epochs)):
             if cfg.MODEL.DIST_TRAIN:
                 assert 1 < 0
             else:
                 use_gpu = True
                 cmc, mAP, ranks = test(model, query_loader, gallery_loader, use_gpu, cfg)
                 ptr = "mAP: {:.2%}".format(mAP)
-                if cmc[0] > best_rank_1:
+                if not final_checkpoint_only and cmc[0] > best_rank_1:
                     best_rank_1 = cmc[0]
                     torch.save(model.state_dict(),
                                os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_rank1_best.pth'))
-                if mAP > best_mAP:
+                if not final_checkpoint_only and mAP > best_mAP:
                     best_mAP = mAP
                     torch.save(model.state_dict(),
                                os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_mAP_best.pth'))
