@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 import os.path as osp
-def setup_logger(name, save_dir, if_train):
+def setup_logger(name, save_dir, if_train, filename=None, mode='w'):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
@@ -15,10 +15,9 @@ def setup_logger(name, save_dir, if_train):
     if save_dir:
         if not osp.exists(save_dir):
             os.makedirs(save_dir)
-        if if_train:
-            fh = logging.FileHandler(os.path.join(save_dir, "train_log.txt"), mode='w')
-        else:
-            fh = logging.FileHandler(os.path.join(save_dir, "test_log.txt"), mode='w')
+        if filename is None:
+            filename = "train_log.txt" if if_train else "test_log.txt"
+        fh = logging.FileHandler(os.path.join(save_dir, filename), mode=mode)
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         logger.addHandler(fh)

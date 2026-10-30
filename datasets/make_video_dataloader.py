@@ -10,7 +10,18 @@ import model.clip
 
 
 def make_dataloader(cfg):
-    dataset = data_manager.init_dataset(name=cfg.DATASETS.NAMES, root=cfg.DATASETS.ROOT_DIR)
+    dataset_options = {}
+    if cfg.DATASETS.NAMES == 'ag_vpreid':
+        dataset_options = dict(direction=cfg.DATASETS.AGVPREID_DIRECTION,
+                               split_dir=cfg.DATASETS.AGVPREID_SPLIT_DIR)
+    dataset = data_manager.init_dataset(name=cfg.DATASETS.NAMES, root=cfg.DATASETS.ROOT_DIR,
+                                        **dataset_options)
+    if cfg.DATALOADER.DYNAMIC_DFGS_STRATIFIED_PLATFORM:
+        from datasets.dynamic_dfgs import platform_labels_from_cameras
+        platform_map = cfg.DATALOADER.DYNAMIC_DFGS_CAMERA_TO_PLATFORM
+        if hasattr(dataset, 'camera_to_platform') and tuple(platform_map) != dataset.camera_to_platform:
+            raise ValueError('Configured camera-to-platform mapping disagrees with dataset metadata')
+        platform_labels_from_cameras([camera for _, _, camera in dataset.train], platform_map)
     num_workers = cfg.DATALOADER.NUM_WORKERS
     spatial_transform_train_stage2 = ST.Compose([
         ST.Scale(cfg.INPUT.SIZE_TRAIN, interpolation=3),
@@ -91,6 +102,15 @@ def make_dataloader(cfg):
 
 def _make_stage2_sampler(cfg, train_data):
     sampler_name = str(cfg.DATALOADER.SAMPLER).lower()
+    if sampler_name == 'random_baseline_k4':
+        if cfg.DATALOADER.DYNAMIC_DFGS_ENABLED:
+            raise ValueError('Random baseline must not enable dynamic DFGS')
+        return IdentityBatchSamplerVideo(
+            train_data, cfg.SOLVER.STAGE2.IMS_PER_BATCH,
+            num_instances=cfg.DATALOADER.NUM_INSTANCE,
+            samples_per_pid=cfg.DATALOADER.PID_SAMPLES_PER_EPOCH,
+            hard_negative_probability=0.0,
+            baseline_replacement_sampling=True)
     if sampler_name == 'softmax_triplet':
         # Reproduction path: preserve the sampler used by the original paper.
         # In particular, identities with fewer than K tracklets draw all K

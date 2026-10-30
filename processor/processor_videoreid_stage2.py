@@ -13,6 +13,7 @@ import einops
 
 from utils.test_video_reid import test, _eval_format_logger
 from datasets.dynamic_dfgs import refresh_dynamic_dfgs_graph, should_refresh_graph
+from utils.reproducibility import reset_training_seed
 
 
 def do_train_stage2(cfg,
@@ -95,6 +96,10 @@ def do_train_stage2(cfg,
     print("text features has been collected, begin to train!")
     best_rank_1 = 0.0
     best_mAP =0.0
+    if cfg.SOLVER.STAGE2.RESET_SEED:
+        reset_training_seed(cfg.SOLVER.SEED)
+        logger.info("Reset Stage-2 training seed to %d; cuDNN benchmark disabled",
+                    cfg.SOLVER.SEED)
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         loss_meter.reset()

@@ -28,6 +28,8 @@ _C.MODEL.PRETRAIN_PATH = ''
 # Optional stage-1 checkpoint used by train_reidadapter.py. A non-empty
 # --stage1weight command-line argument still takes precedence.
 _C.MODEL.STAGE1_WEIGHT = ''
+# Opt-in validation for paired runs that must share the complete initial model.
+_C.MODEL.STAGE1_STRICT_LOAD = False
 
 _C.MODEL.FUSION_HEAD_NUM = 12
 _C.MODEL.FUSION_LAYER_NUM = 2
@@ -118,6 +120,9 @@ _C.DATASETS = CN()
 _C.DATASETS.NAMES = ('market1501')
 # Root directory where datasets should be used (and downloaded if not found)
 _C.DATASETS.ROOT_DIR = ('../data')
+# AG-VPReID uses the actual filename camera labels to validate the direction.
+_C.DATASETS.AGVPREID_DIRECTION = 'g2a'
+_C.DATASETS.AGVPREID_SPLIT_DIR = ''
 
 
 # -----------------------------------------------------------------------------
@@ -141,8 +146,27 @@ _C.DATALOADER.DYNAMIC_DFGS_QUALITY_WEIGHTED = False
 _C.DATALOADER.DYNAMIC_DFGS_RELIABLE_NEGATIVES = False
 _C.DATALOADER.DYNAMIC_DFGS_STRATIFIED_TWO_CAMERA = False
 _C.DATALOADER.DYNAMIC_DFGS_STRATIFIED_MULTICAMERA = False
+# Replace reliability-selected exclusions with a deterministic random set of
+# the same size for a matched filtering control.
+_C.DATALOADER.DYNAMIC_DFGS_RANDOM_FILTER = False
+# When set, random filtering uses the paired E4 graph's exclusion count at
+# each refresh epoch. The random identities are still sampled from this run.
+_C.DATALOADER.DYNAMIC_DFGS_RANDOM_FILTER_REFERENCE_DIR = ''
+# Match the reference filter's per-anchor candidate impact and rank/similarity
+# distributions while keeping the sampled IDs disjoint from the reference IDs.
+_C.DATALOADER.DYNAMIC_DFGS_RANDOM_FILTER_MATCH_CANDIDATE_IMPACT = False
+_C.DATALOADER.DYNAMIC_DFGS_RANDOM_FILTER_MATCH_ITERATIONS = 6000
+_C.DATALOADER.DYNAMIC_DFGS_RANDOM_FILTER_MATCH_RESTARTS = 4
+# Optional two-platform reliability filtering; camera IDs still feed PBP/eval.
+_C.DATALOADER.DYNAMIC_DFGS_STRATIFIED_PLATFORM = False
+# Entry i gives the platform of camera i: 0=ground, 1=aerial.
+_C.DATALOADER.DYNAMIC_DFGS_CAMERA_TO_PLATFORM = []
 _C.DATALOADER.DYNAMIC_DFGS_MIN_OBSERVED_CAMERAS = 2
 _C.DATALOADER.DYNAMIC_DFGS_MIN_LOW_CAMERA_FRACTION = 0.5
+# Reliability thresholds may be stratified independently by camera and/or
+# tracklet length when multicamera filtering is enabled. Defaults preserve E4.
+_C.DATALOADER.DYNAMIC_DFGS_GROUP_BY_CAMERA = True
+_C.DATALOADER.DYNAMIC_DFGS_GROUP_BY_LENGTH = True
 _C.DATALOADER.DYNAMIC_DFGS_CANDIDATE_POOL = 30
 _C.DATALOADER.DYNAMIC_DFGS_LOW_QUALITY_FRACTION = 0.20
 _C.DATALOADER.DYNAMIC_DFGS_SOFT_NEGATIVES = False
@@ -150,6 +174,8 @@ _C.DATALOADER.DYNAMIC_DFGS_LOW_CANDIDATE_WEIGHT = 0.25
 _C.DATALOADER.DYNAMIC_DFGS_BATCH_SIZE = 8
 _C.DATALOADER.DYNAMIC_DFGS_NUM_WORKERS = 0
 _C.DATALOADER.DYNAMIC_DFGS_SAVE_GRAPHS = True
+# Keep graph extraction from consuming the training RNG streams in paired runs.
+_C.DATALOADER.DYNAMIC_DFGS_PRESERVE_RNG_STATE = False
 _C.DATALOADER.PID_SAMPLES_PER_EPOCH = 0
 _C.DATALOADER.RHP_GRAPH = ''
 
@@ -260,6 +286,13 @@ _C.SOLVER.STAGE2.EVAL_PERIOD = 10
 # When true, only the final epoch is evaluated and no test-selected best
 # checkpoint is written. The final epoch checkpoint is always saved.
 _C.SOLVER.STAGE2.FINAL_CHECKPOINT_ONLY = False
+# Reset all training seeds at the Stage-2 boundary, independently of Stage 1.
+# Also disables cuDNN benchmarking.
+_C.SOLVER.STAGE2.RESET_SEED = False
+# Refuse to overwrite prior runs independently of the random-state protocol.
+_C.SOLVER.STAGE2.PROTECT_OUTPUT = False
+# Evaluation adapters for completed runs must never launch another training job.
+_C.SOLVER.STAGE2.EVALUATION_ONLY = False
 # Number of images per batch
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 128, each GPU will
 # contain 16 images per batch
@@ -275,6 +308,9 @@ _C.TEST.IMS_PER_BATCH = 128
 _C.TEST.RE_RANKING = False
 # Path to trained model
 _C.TEST.WEIGHT = ""
+# AG-VPReID standalone test directions; empty uses DATASETS.AGVPREID_DIRECTION.
+# Training checkpoint selection still uses DATASETS.AGVPREID_DIRECTION only.
+_C.TEST.AGVPREID_DIRECTIONS = []
 # Which feature of BNNeck to be used for test, before or after BNNneck, options: 'before' or 'after'
 _C.TEST.NECK_FEAT = 'after'
 # Whether feature is nomalized before test, if yes, it is equivalent to cosine distance

@@ -1,5 +1,4 @@
-# Fixed-epoch-120 stage-2 baseline comparison; shared seed-1234 stage-1 checkpoint.
-# Stage 1 is loaded from the shared baseline checkpoint; only stage 2 is trained.
+# Strict per-refresh E4-count-matched random-filter control; seed 1234
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -13,11 +12,11 @@ MODEL:
   I2T_WEIGHT: 1.0
   T2I_WEIGHT: 1.0
   VIFI_WEIGHT: 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
-  STAGE1_WEIGHT: 'output/reproduce/vifi_no_pbp_baseline_seed1234_lr2e4_retrain/ViT-B-16_stage1_120.pth'
+  STAGE1_WEIGHT: 'output/reproduce/g2a_vifi_pbp_p4k4_seed1234_lr2e4/ViT-B-16_stage1_120.pth'
   USE_VIFI_WEIGHT: True
   PROMPT_LEN: 8
   USE_LEARNABLE_PROMPT: True
-  PBP_CAMERA: False
+  PBP_CAMERA: True
   PBP_VIEW: False
   PBP_PROMPT_DEEP: 3
   PBP_PROMPT_LEN: 16
@@ -36,14 +35,33 @@ INPUT:
   PIXEL_STD: [0.229, 0.224, 0.225]
 
 DATALOADER:
-  SAMPLER: 'softmax_triplet'
+  SAMPLER: 'mixed_dfgs_baseline_k4'
   NUM_INSTANCE: 4
   NUM_WORKERS: 8
   SEQ_LEN: 8
-  PID_SAMPLES_PER_EPOCH: 0
+  PID_SAMPLES_PER_EPOCH: 4
+  DFGS_GRAPH: ''
+  DFGS_PROBABILITY: 0.25
+  DYNAMIC_DFGS_ENABLED: True
+  DYNAMIC_DFGS_UPDATE_PERIOD: 10
+  DYNAMIC_DFGS_SKIP: 2
+  DYNAMIC_DFGS_NEIGHBORS: 10
+  DYNAMIC_DFGS_QUALITY_WEIGHTED: False
+  DYNAMIC_DFGS_RELIABLE_NEGATIVES: True
+  DYNAMIC_DFGS_STRATIFIED_TWO_CAMERA: False
+  DYNAMIC_DFGS_STRATIFIED_MULTICAMERA: True
+  DYNAMIC_DFGS_RANDOM_FILTER: True
+  DYNAMIC_DFGS_RANDOM_FILTER_REFERENCE_DIR: 'output/innovation/g2a_E4_pbp_multicamera_dynamic_DFGS_V_q025_p4k4_seed1234_lr2e4/dynamic_dfgs_graphs'
+  DYNAMIC_DFGS_MIN_OBSERVED_CAMERAS: 2
+  DYNAMIC_DFGS_MIN_LOW_CAMERA_FRACTION: 0.5
+  DYNAMIC_DFGS_CANDIDATE_POOL: 30
+  DYNAMIC_DFGS_LOW_QUALITY_FRACTION: 0.20
+  DYNAMIC_DFGS_BATCH_SIZE: 8
+  DYNAMIC_DFGS_NUM_WORKERS: 0
+  DYNAMIC_DFGS_SAVE_GRAPHS: True
 
 SOLVER:
-  SEED: 2025
+  SEED: 1234
   STAGE1:
     IMS_PER_BATCH: 32
     OPTIMIZER_NAME: 'Adam'
@@ -57,9 +75,8 @@ SOLVER:
     CHECKPOINT_PERIOD: 120
     LOG_PERIOD: 10
     WARMUP_EPOCHS: 5
-
   STAGE2:
-    IMS_PER_BATCH: 8
+    IMS_PER_BATCH: 16
     OPTIMIZER_NAME: 'Adam'
     BASE_LR: 0.0002
     WARMUP_METHOD: 'linear'
@@ -71,8 +88,8 @@ SOLVER:
     MAX_EPOCHS: 120
     CHECKPOINT_PERIOD: 120
     LOG_PERIOD: 50
-    EVAL_PERIOD: 120
-    FINAL_CHECKPOINT_ONLY: True
+    EVAL_PERIOD: 10
+    PROTECT_OUTPUT: True
     BIAS_LR_FACTOR: 2
     STEPS: [60, 90]
     GAMMA: 0.1
@@ -81,7 +98,7 @@ TEST:
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: 'output/reproduce/vifi_no_pbp_stage2_seed2025_fixed120_lr2e4/ViT-B-16_120.pth'
+  WEIGHT: 'output/innovation/g2a_E4_random_filter_strictmatched_user_vifi_pbp_p4k4_seed1234_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
@@ -91,4 +108,4 @@ DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../datas/G2A-VReID')
 
-OUTPUT_DIR: 'output/reproduce/vifi_no_pbp_stage2_seed2025_fixed120_lr2e4'
+OUTPUT_DIR: 'output/innovation/g2a_E4_random_filter_strictmatched_user_vifi_pbp_p4k4_seed1234_lr2e4'

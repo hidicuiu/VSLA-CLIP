@@ -1,4 +1,4 @@
-# P4K4 random baseline: train both stages and save its own stage-1 checkpoint.
+# P4K4 + PBP baseline; seed 2025, otherwise follow the original seed1234 configuration.
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -16,7 +16,7 @@ MODEL:
   USE_VIFI_WEIGHT: True
   PROMPT_LEN: 8
   USE_LEARNABLE_PROMPT: True
-  PBP_CAMERA: False
+  PBP_CAMERA: True
   PBP_VIEW: False
   PBP_PROMPT_DEEP: 3
   PBP_PROMPT_LEN: 16
@@ -42,7 +42,7 @@ DATALOADER:
   PID_SAMPLES_PER_EPOCH: 0
 
 SOLVER:
-  SEED: 1234
+  SEED: 2025
   STAGE1:
     IMS_PER_BATCH: 32
     OPTIMIZER_NAME: 'Adam'
@@ -70,6 +70,7 @@ SOLVER:
     CHECKPOINT_PERIOD: 120
     LOG_PERIOD: 50
     EVAL_PERIOD: 10
+    PROTECT_OUTPUT: True
     BIAS_LR_FACTOR: 2
     STEPS: [60, 90]
     GAMMA: 0.1
@@ -78,7 +79,7 @@ TEST:
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: 'output/reproduce/g2a_vifi_no_pbp_p4k4_seed1234_lr2e4/ViT-B-16_mAP_best.pth'
+  WEIGHT: 'output/reproduce/g2a_baseline_vifi_pbp_p4k4_seed2025_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
@@ -88,4 +89,4 @@ DATASETS:
   NAMES: ('g2a')
   ROOT_DIR: ('../datas/G2A-VReID')
 
-OUTPUT_DIR: 'output/reproduce/g2a_vifi_no_pbp_p4k4_seed1234_lr2e4'
+OUTPUT_DIR: 'output/reproduce/g2a_baseline_vifi_pbp_p4k4_seed2025_lr2e4'

@@ -1,4 +1,4 @@
-# PBP stability: PBP disabled, seed 2025
+# AG-VPReID local G2A protocol; P4K4 with the same per-identity budget in all three arms.
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   METRIC_LOSS_TYPE: 'triplet'
@@ -12,11 +12,11 @@ MODEL:
   I2T_WEIGHT: 1.0
   T2I_WEIGHT: 1.0
   VIFI_WEIGHT: 'pretrained/vifi/vifi_clip_k400_for_vsla.pth'
-  STAGE1_WEIGHT: 'output/G2A/vifi_pbp_final_lr2e4/ViT-B-16_stage1_120.pth'
+  STAGE1_WEIGHT: 'output/reproduce/agvpreid_vifi_pbp_p4k4_seed1234_lr2e4/ViT-B-16_stage1_120.pth'
   USE_VIFI_WEIGHT: True
   PROMPT_LEN: 8
   USE_LEARNABLE_PROMPT: True
-  PBP_CAMERA: False
+  PBP_CAMERA: True
   PBP_VIEW: False
   PBP_PROMPT_DEEP: 3
   PBP_PROMPT_LEN: 16
@@ -35,14 +35,33 @@ INPUT:
   PIXEL_STD: [0.229, 0.224, 0.225]
 
 DATALOADER:
-  SAMPLER: 'softmax_triplet'
+  SAMPLER: 'mixed_dfgs_baseline_k4'
   NUM_INSTANCE: 4
   NUM_WORKERS: 8
   SEQ_LEN: 8
-  PID_SAMPLES_PER_EPOCH: 0
+  PID_SAMPLES_PER_EPOCH: 4
+  DFGS_GRAPH: ''
+  DFGS_PROBABILITY: 0.25
+  DYNAMIC_DFGS_ENABLED: True
+  DYNAMIC_DFGS_UPDATE_PERIOD: 10
+  DYNAMIC_DFGS_SKIP: 2
+  DYNAMIC_DFGS_NEIGHBORS: 10
+  DYNAMIC_DFGS_QUALITY_WEIGHTED: False
+  DYNAMIC_DFGS_RELIABLE_NEGATIVES: True
+  DYNAMIC_DFGS_STRATIFIED_TWO_CAMERA: False
+  DYNAMIC_DFGS_STRATIFIED_MULTICAMERA: True
+  DYNAMIC_DFGS_STRATIFIED_PLATFORM: False
+  DYNAMIC_DFGS_CAMERA_TO_PLATFORM: [0, 0, 0, 0, 1, 1]
+  DYNAMIC_DFGS_MIN_OBSERVED_CAMERAS: 2
+  DYNAMIC_DFGS_MIN_LOW_CAMERA_FRACTION: 0.5
+  DYNAMIC_DFGS_CANDIDATE_POOL: 30
+  DYNAMIC_DFGS_LOW_QUALITY_FRACTION: 0.20
+  DYNAMIC_DFGS_BATCH_SIZE: 8
+  DYNAMIC_DFGS_NUM_WORKERS: 0
+  DYNAMIC_DFGS_SAVE_GRAPHS: True
 
 SOLVER:
-  SEED: 2025
+  SEED: 1234
   STAGE1:
     IMS_PER_BATCH: 32
     OPTIMIZER_NAME: 'Adam'
@@ -57,7 +76,7 @@ SOLVER:
     LOG_PERIOD: 10
     WARMUP_EPOCHS: 5
   STAGE2:
-    IMS_PER_BATCH: 8
+    IMS_PER_BATCH: 16
     OPTIMIZER_NAME: 'Adam'
     BASE_LR: 0.0002
     WARMUP_METHOD: 'linear'
@@ -75,17 +94,20 @@ SOLVER:
     GAMMA: 0.1
 
 TEST:
+  AGVPREID_DIRECTIONS: ['g2a', 'a2g']
   EVAL: True
   IMS_PER_BATCH: 4
   RE_RANKING: False
-  WEIGHT: 'output/ablation/PBP_no_pbp_seed2025_lr2e4/ViT-B-16_mAP_best.pth'
+  WEIGHT: 'output/innovation/agvpreid_E4_camera_pbp_p4k4_seed1234_lr2e4/ViT-B-16_mAP_best.pth'
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
   ALL_FRAMES: False
   DISTANCE: 'cosine'
 
 DATASETS:
-  NAMES: ('g2a')
-  ROOT_DIR: ('../G2A-VReID')
-OUTPUT_DIR: 'output/reproduce/vifi_no_pbp_seed2025_lr2e4'
+  NAMES: 'ag_vpreid'
+  ROOT_DIR: '../datas/AG-VPReID'
+  AGVPREID_DIRECTION: 'g2a'
+  AGVPREID_SPLIT_DIR: 'case2_groud_to_aerial'
 
+OUTPUT_DIR: 'output/innovation/agvpreid_E4_camera_pbp_p4k4_seed1234_lr2e4'

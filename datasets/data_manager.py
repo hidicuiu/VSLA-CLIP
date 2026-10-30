@@ -9,6 +9,8 @@ import numpy as np
 import logging
 import h5py
 import math
+import re
+from collections import Counter, defaultdict
 
 from utils.utils import mkdir_if_missing, write_json, read_json
 
@@ -1154,13 +1156,161 @@ class LSVID2(object):
         return tracklets, num_tracklets, num_pids, num_imgs_per_tracklet
 
 
+AGVPREID_CAMERA_TO_PLATFORM = (0, 0, 0, 0, 1, 1)
+AGVPREID_FRAME_PATTERN = re.compile(
+    r"^P(?P<pid>\d+)T.*?C(?P<camera>\d+)E.*?F(?P<frame>\d+)\.(?:jpg|jpeg|png)$",
+    re.IGNORECASE)
+
+
+def _ag_vpreid_natural_key(value):
+    return [int(part) if part.isdigit() else part.lower()
+            for part in re.split(r"(\d+)", value)]
+
+
+def _ag_vpreid_subdirectories(path):
+    return sorted((entry.name for entry in os.scandir(path) if entry.is_dir()),
+                  key=_ag_vpreid_natural_key)
+
+
+def _ag_vpreid_read_split(path, min_seq_len):
+    tracklets = []
+    folder_p_codes = defaultdict(set)
+    for person_dir in _ag_vpreid_subdirectories(path):
+        try:
+            annotated_pid = int(person_dir)
+        except ValueError:
+            raise ValueError("AG-VPReID identity directory must be an integer: {}".format(person_dir))
+        person_path = os.path.join(path, person_dir)
+        for tracklet_dir in _ag_vpreid_subdirectories(person_path):
+            tracklet_path = os.path.join(person_path, tracklet_dir)
+            frames = []
+            labels = set()
+            for entry in os.scandir(tracklet_path):
+                if not entry.is_file() or not entry.name.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
+                match = AGVPREID_FRAME_PATTERN.fullmatch(entry.name)
+                if match is None:
+                    raise ValueError("AG-VPReID frame has no P/C/F metadata: {}".format(entry.path))
+                pid, camera, frame = (int(match.group(field)) for field in ("pid", "camera", "frame"))
+                if camera >= len(AGVPREID_CAMERA_TO_PLATFORM):
+                    raise ValueError("Unknown AG-VPReID camera C{}: {}".format(camera, entry.path))
+                labels.add((pid, camera))
+                frames.append((frame, entry.name, entry.path))
+            if not frames:
+                raise ValueError("AG-VPReID tracklet contains no frames: {}".format(tracklet_path))
+            if len(labels) != 1:
+                raise ValueError("Mixed P/C labels in AG-VPReID tracklet: {}".format(tracklet_path))
+            filename_pid, camera = next(iter(labels))
+            folder_p_codes[person_dir].add(filename_pid)
+            if len(frames) >= min_seq_len:
+                frames.sort()
+                tracklets.append((tuple(item[2] for item in frames), annotated_pid, camera))
+    if not tracklets:
+        raise ValueError("AG-VPReID split has no usable tracklets: {}".format(path))
+    camera_counts = Counter(camera for _, _, camera in tracklets)
+    summary = {
+        "identities": len({pid for _, pid, _ in tracklets}),
+        "tracklets": len(tracklets),
+        "frames": sum(len(paths) for paths, _, _ in tracklets),
+        "camera_tracklets": dict(sorted(camera_counts.items())),
+        "platform_tracklets": dict(sorted(Counter(
+            AGVPREID_CAMERA_TO_PLATFORM[camera] for _, _, camera in tracklets).items())),
+        "parent_folders_with_multiple_P_codes": sum(len(pids) > 1 for pids in folder_p_codes.values()),
+    }
+    return tracklets, summary
+
+
+class AGVPReID(object):
+    def __init__(self, root=None, direction="g2a", split_dir="", min_seq_len=0,
+                 verbose=True, **kwargs):
+        if root is None:
+            raise ValueError("AG-VPReID requires a dataset root")
+        direction = direction.lower()
+        candidates = {
+            "g2a": ("case2_ground_to_aerial", "case2_groud_to_aerial"),
+            "a2g": ("case1_aerial_to_ground", "case1_aerial_to_groud"),
+        }
+        if direction not in candidates:
+            raise ValueError("AG-VPReID direction must be g2a or a2g")
+        if split_dir:
+            test_root = os.path.join(root, split_dir)
+        else:
+            available = [os.path.join(root, name) for name in candidates[direction]
+                         if os.path.isdir(os.path.join(root, name))]
+            if len(available) != 1:
+                raise ValueError("Specify DATASETS.AGVPREID_SPLIT_DIR; expected exactly one {} directory, found {}"
+                                 .format(direction, available))
+            test_root = available[0]
+        paths = {"train": os.path.join(root, "train"),
+                 "query": os.path.join(test_root, "query"),
+                 "gallery": os.path.join(test_root, "gallery")}
+        splits, summaries = {}, {}
+        for name, path in paths.items():
+            if not os.path.isdir(path):
+                raise FileNotFoundError(path)
+            splits[name], summaries[name] = _ag_vpreid_read_split(path, min_seq_len)
+
+        expected_query, expected_gallery = ((0, 1) if direction == "g2a" else (1, 0))
+        for name, expected in (("query", expected_query), ("gallery", expected_gallery)):
+            actual = {AGVPREID_CAMERA_TO_PLATFORM[camera] for _, _, camera in splits[name]}
+            if actual != {expected}:
+                raise ValueError("AG-VPReID {} {} contains platforms {}; expected {} (0=ground, 1=aerial). "
+                                 "Check the files, not only the directory name."
+                                 .format(direction, name, sorted(actual), expected))
+
+        raw_train_ids = {pid for _, pid, _ in splits["train"]}
+        query_ids = {pid for _, pid, _ in splits["query"]}
+        gallery_ids = {pid for _, pid, _ in splits["gallery"]}
+        overlap = raw_train_ids & (query_ids | gallery_ids)
+        if overlap:
+            raise ValueError("AG-VPReID annotated folder identities overlap between train and test: {}"
+                             .format(sorted(overlap)[:10]))
+        missing = query_ids - gallery_ids
+        if missing:
+            raise ValueError("AG-VPReID queries have no cross-platform gallery match: {}"
+                             .format(sorted(missing)[:10]))
+
+        pid_to_label = {pid: label for label, pid in enumerate(sorted(raw_train_ids))}
+        self.train = [(frames, pid_to_label[pid], camera)
+                      for frames, pid, camera in splits["train"]]
+        self.query, self.gallery = splits["query"], splits["gallery"]
+        self.num_train_pids = len(raw_train_ids)
+        self.num_query_pids = len(query_ids)
+        self.num_gallery_pids = len(gallery_ids)
+        self.num_camera = len(AGVPREID_CAMERA_TO_PLATFORM)
+        self.camera_to_platform = AGVPREID_CAMERA_TO_PLATFORM
+        platforms_by_pid = defaultdict(set)
+        for _, pid, camera in self.train:
+            platforms_by_pid[pid].add(AGVPREID_CAMERA_TO_PLATFORM[camera])
+        self.audit = {
+            "direction": direction,
+            "test_root": os.path.abspath(test_root),
+            "identity_source": "annotated parent folder ID, as in the official reader",
+            "splits": summaries,
+            "train_test_overlap": 0,
+            "queries_without_gallery_match": 0,
+            "gallery_distractor_identities": len(gallery_ids - query_ids),
+            "training_identities_with_both_platforms": sum(
+                len(platforms) == 2 for platforms in platforms_by_pid.values()),
+        }
+        if verbose:
+            print("=> AG-VPReID {} loaded (annotated folder identities)".format(direction.upper()))
+            for name, summary in summaries.items():
+                print("  {}: {} identities, {} tracklets, camera tracklets={}"
+                      .format(name, summary["identities"], summary["tracklets"], summary["camera_tracklets"]))
+            print("  train identities with both platforms: {}/{}; gallery distractor identities: {}"
+                  .format(self.audit["training_identities_with_both_platforms"],
+                          self.num_train_pids, self.audit["gallery_distractor_identities"]))
+
+
 __factory = {
     'mars': Mars,
     'ilidsvid': iLIDSVID,
     'prid': PRID,
     'lsvid': LSVID,
     'duke': DukeMTMCVidReID,
-    'g2a': G2A
+    'g2a': G2A,
+    'ag_vpreid': AGVPReID,
 }
 
 

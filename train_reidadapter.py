@@ -40,9 +40,12 @@ if __name__ == '__main__':
     if args.config_file != "":
         cfg.merge_from_file(args.config_file)
 
-    cfg.stage1weight = args.stage1weight if args.stage1weight else cfg.MODEL.STAGE1_WEIGHT
     cfg.merge_from_list(args.opts)
+    cfg.stage1weight = args.stage1weight if args.stage1weight else cfg.MODEL.STAGE1_WEIGHT
     cfg.freeze()
+
+    if cfg.SOLVER.STAGE2.EVALUATION_ONLY:
+        raise ValueError("This configuration reuses a completed run. Use test.py, not train_reidadapter.py.")
 
     set_seed(cfg.SOLVER.SEED)
 
@@ -50,6 +53,9 @@ if __name__ == '__main__':
         torch.cuda.set_device(args.local_rank)
 
     output_dir = cfg.OUTPUT_DIR
+    if ((cfg.SOLVER.STAGE2.RESET_SEED or cfg.SOLVER.STAGE2.PROTECT_OUTPUT) and output_dir and
+            os.path.isdir(output_dir) and os.listdir(output_dir)):
+        raise FileExistsError("Paired run output must be empty: {}".format(output_dir))
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -84,8 +90,11 @@ if __name__ == '__main__':
 
     if cfg.stage1weight != "":
         logger.info("skip stage one")
-        weight_dict = torch.load(cfg.stage1weight)
-        model.load_state_dict(weight_dict, strict=False)
+        weight_dict = torch.load(cfg.stage1weight, map_location='cpu')
+        model.load_state_dict(weight_dict, strict=cfg.MODEL.STAGE1_STRICT_LOAD)
+        logger.info("Loaded Stage-1 checkpoint %s (strict=%s)",
+                    cfg.stage1weight, cfg.MODEL.STAGE1_STRICT_LOAD)
+        del weight_dict
     else:
         do_train_stage1(
             cfg,
