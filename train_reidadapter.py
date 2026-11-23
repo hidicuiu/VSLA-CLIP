@@ -13,6 +13,8 @@ import numpy as np
 import os
 import argparse
 from config import cfg
+from model.multihead_frame_aggregation import (
+    load_original_stage1, validate_frame_aggregation_config)
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -42,6 +44,7 @@ if __name__ == '__main__':
 
     cfg.merge_from_list(args.opts)
     cfg.stage1weight = args.stage1weight if args.stage1weight else cfg.MODEL.STAGE1_WEIGHT
+    validate_frame_aggregation_config(cfg)
     cfg.freeze()
 
     if cfg.SOLVER.STAGE2.EVALUATION_ONLY:
@@ -91,7 +94,9 @@ if __name__ == '__main__':
     if cfg.stage1weight != "":
         logger.info("skip stage one")
         weight_dict = torch.load(cfg.stage1weight, map_location='cpu')
-        model.load_state_dict(weight_dict, strict=cfg.MODEL.STAGE1_STRICT_LOAD)
+        loaded = load_original_stage1(model, weight_dict, strict=cfg.MODEL.STAGE1_STRICT_LOAD)
+        if cfg.MODEL.FRAME_AGGREGATION != 'mean':
+            logger.info('New frame aggregation initialized separately; missing keys: %s', loaded.missing_keys)
         logger.info("Loaded Stage-1 checkpoint %s (strict=%s)",
                     cfg.stage1weight, cfg.MODEL.STAGE1_STRICT_LOAD)
         del weight_dict

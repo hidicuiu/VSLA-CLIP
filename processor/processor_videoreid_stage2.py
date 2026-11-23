@@ -9,6 +9,7 @@ from torch.cuda import amp
 import torch.distributed as dist
 from torch.nn import functional as F
 from loss.supcontrast import SupConLoss
+from loss.frame_head_supervision import FrameHeadSupervision
 import einops
 
 from utils.test_video_reid import test, _eval_format_logger
@@ -40,6 +41,28 @@ def do_train_stage2(cfg,
 
     logger = logging.getLogger("transreid.train")
     logger.info('start training')
+    aggregation_enabled = cfg.MODEL.FRAME_AGGREGATION != 'mean'
+    diversity_weight = cfg.MODEL.FRAME_AGGREGATION_DIVERSITY_WEIGHT
+    head_loss_weight = cfg.MODEL.FRAME_AGGREGATION_HEAD_LOSS_WEIGHT
+    head_criterion = FrameHeadSupervision(cfg) if head_loss_weight else None
+    if aggregation_enabled:
+        logger.info('Frame aggregation: training/retrieval=%s heads=%d groups=%d diversity-weight=%.4f; '
+                    'dynamic DFGS center/reliability readout=%s',
+                    cfg.MODEL.FRAME_AGGREGATION, cfg.MODEL.FRAME_AGGREGATION_HEADS,
+                    cfg.MODEL.FRAME_AGGREGATION_GROUPS, diversity_weight, cfg.DATALOADER.DYNAMIC_DFGS_READOUT)
+        if cfg.MODEL.FRAME_AGGREGATION_GROUPS > 1:
+            logger.info('Feature-group frame scores: weights=[batch,heads,groups,frames]; '
+                        'softmax is over frames, statistics average all heads/groups; '
+                        'feature groups are channel partitions, not predefined body parts')
+        if cfg.MODEL.FRAME_AGGREGATION == 'single_shared':
+            logger.info('Single shared attention: one learned frame distribution repeated into two fusion slots; '
+                        'head-overlap=1 is expected, diversity regularization is disabled')
+        if cfg.MODEL.FRAME_AGGREGATION.startswith('conditional'):
+            logger.info('Conditional controls: mode=%s head-loss-weight=%.4f suppression=%.3f '
+                        'gate-init=%.3f; centered bias-free residuals, live shared head classifier',
+                        cfg.MODEL.FRAME_AGGREGATION, head_loss_weight,
+                        cfg.MODEL.FRAME_AGGREGATION_SUPPRESSION,
+                        cfg.MODEL.FRAME_AGGREGATION_GATE_INIT)
     _LOCAL_PROCESS_GROUP = None
     if device:
         model.to(local_rank)
@@ -51,6 +74,11 @@ def do_train_stage2(cfg,
             num_classes = model.num_classes
 
     loss_meter = AverageMeter()
+    diversity_meter = AverageMeter()
+    entropy_meter = AverageMeter()
+    max_weight_meter = AverageMeter()
+    head_id_meter, head_triplet_meter = AverageMeter(), AverageMeter()
+    gate_meter, primary_residual_meter, supplement_residual_meter = AverageMeter(), AverageMeter(), AverageMeter()
     acc_meter = AverageMeter()
 
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
@@ -103,6 +131,12 @@ def do_train_stage2(cfg,
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         loss_meter.reset()
+        diversity_meter.reset()
+        entropy_meter.reset()
+        max_weight_meter.reset()
+        for meter in (head_id_meter, head_triplet_meter, gate_meter,
+                      primary_residual_meter, supplement_residual_meter):
+            meter.reset()
         acc_meter.reset()
         evaluator.reset()
 
@@ -133,16 +167,24 @@ def do_train_stage2(cfg,
             else: 
                 target_view = None
             with amp.autocast(enabled=True):
-                score, feat, image_features = model(
-                    x=img,
-                    label=target,
-                    cam_label=target_cam,
-                    view_label=target_view)
+                if aggregation_enabled:
+                    score, feat, image_features, aggregation_aux = model(
+                        x=img, label=target, cam_label=target_cam,
+                        view_label=target_view, return_aggregation_aux=True)
+                else:
+                    score, feat, image_features = model(
+                        x=img, label=target, cam_label=target_cam,
+                        view_label=target_view)
                 text_feature = model(label=target, get_text=True)
                 loss_i2t = xent(image_features, text_feature, target, target)
                 loss_t2i = xent(text_feature, image_features, target, target)
                 logits = image_features @ text_features.t()
                 loss = loss_fn(score, feat, target, target_cam, logits, loss_t2i, loss_i2t)
+                if aggregation_enabled and diversity_weight:
+                    loss = loss + diversity_weight * aggregation_aux['diversity_loss'].mean()
+                if head_criterion is not None:
+                    head_loss, head_details = head_criterion(aggregation_aux, target)
+                    loss = loss + head_loss_weight * head_loss
 
                 # 更新样本中心
 
@@ -160,6 +202,18 @@ def do_train_stage2(cfg,
             acc = (logits.max(1)[1] == target).float().mean()
 
             loss_meter.update(loss.item(), img.shape[0])
+            if aggregation_enabled:
+                weights = aggregation_aux['weights'].detach().float()
+                diversity_meter.update(float(aggregation_aux['diversity_loss'].detach().mean()), img.shape[0])
+                entropy_meter.update(float(-(weights * weights.clamp_min(1e-12).log()).sum(-1).mean()), img.shape[0])
+                max_weight_meter.update(float(weights.max(-1).values.mean()), img.shape[0])
+                if head_criterion is not None:
+                    head_id_meter.update(float(head_details['head_id_loss'].detach()), img.shape[0])
+                    head_triplet_meter.update(float(head_details['head_triplet_loss'].detach()), img.shape[0])
+                if 'supplement_gate' in aggregation_aux:
+                    gate_meter.update(float(aggregation_aux['supplement_gate'].detach().mean()), img.shape[0])
+                    primary_residual_meter.update(float(aggregation_aux['primary_residual_relative_norm'].detach().mean()), img.shape[0])
+                    supplement_residual_meter.update(float(aggregation_aux['supplement_residual_relative_norm'].detach().mean()), img.shape[0])
             acc_meter.update(acc, 1)
 
             torch.cuda.synchronize()
@@ -168,6 +222,17 @@ def do_train_stage2(cfg,
                             .format(epoch, (n_iter + 1), len(train_loader_stage2),
                                     loss_meter.avg, acc_meter.avg, scheduler.get_lr()[0]))
 
+        if aggregation_enabled:
+            logger.info('Frame aggregation epoch means: cosine-head-overlap=%.6f entropy=%.6f '
+                        'max-weight=%.6f diversity-weight=%.4f',
+                        diversity_meter.avg, entropy_meter.avg, max_weight_meter.avg,
+                        diversity_weight)
+            if cfg.MODEL.FRAME_AGGREGATION.startswith('conditional'):
+                logger.info('Conditional epoch means: head-ID=%.6f head-triplet=%.6f '
+                            'head-loss-weight=%.4f supplement-gate=%.6f '
+                            'primary-residual-ratio=%.6f supplement-residual-ratio=%.6f',
+                            head_id_meter.avg, head_triplet_meter.avg, head_loss_weight,
+                            gate_meter.avg, primary_residual_meter.avg, supplement_residual_meter.avg)
         end_time = time.time()
         time_per_batch = (end_time - start_time) / (n_iter + 1)
         if cfg.MODEL.DIST_TRAIN:

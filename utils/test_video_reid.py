@@ -17,6 +17,18 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 
 
+EVALUATION_PROTOCOL = 'FP32, math SDPA, no_grad; non-finite features/distances rejected'
+
+
+def _ensure_finite(value, description):
+    finite = torch.isfinite(value)
+    if not bool(finite.all()):
+        invalid = int((~finite).sum())
+        raise FloatingPointError(
+            '{} contains {} NaN/Inf values (shape={}); evaluation aborted.'.format(
+                description, invalid, tuple(value.shape)))
+
+
 def print_time(string=''):
     ctime = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime())
     res = ctime + ' | ' + string
@@ -66,14 +78,18 @@ def _feats_of_loader(model, loader, feat_func=extract_feat_sampled_frames, use_g
     qf, q_pids, q_camids = [], [], []
 
     pd = tqdm(total=len(loader), ncols=120, leave=False)
-    for batch_idx, (vids, pids, camids) in enumerate(loader):
-        pd.update(1)
+    try:
+        for batch_idx, (vids, pids, camids) in enumerate(loader):
+            pd.update(1)
 
-        f = feat_func(model, vids, camids, use_gpu=use_gpu)
-        qf.append(f)
-        q_pids.extend(pids.numpy())
-        q_camids.extend(camids.numpy())
-    pd.close()
+            f = feat_func(model, vids, camids, use_gpu=use_gpu)
+            _ensure_finite(f, 'Video features at batch {} (pids={}, cameras={})'.format(
+                batch_idx + 1, pids.tolist(), camids.tolist()))
+            qf.append(f)
+            q_pids.extend(pids.numpy())
+            q_camids.extend(camids.numpy())
+    finally:
+        pd.close()
 
     qf = torch.cat(qf, 0)
     q_pids = np.asarray(q_pids)
@@ -99,12 +115,15 @@ def _cal_dist(qf, gf, distance='cosine'):
     :return:
         distance matrix with shape, (query_num, gallery_num)
     """
+    _ensure_finite(qf, 'Query features')
+    _ensure_finite(gf, 'Gallery features')
     if distance == 'cosine':
         qf = F.normalize(qf, dim=1, p=2)
         gf = F.normalize(gf, dim=1, p=2)
         distmat = -torch.matmul(qf, gf.transpose(0, 1))
     else:
         raise NotImplementedError
+    _ensure_finite(distmat, 'Retrieval distance matrix')
     return distmat
 
 
@@ -131,6 +150,7 @@ def compute_ap_cmc(index, good_index, junk_index):
     return ap, cmc
 
 def evaluate(distmat, q_pids, g_pids, q_camids, g_camids):
+    _ensure_finite(distmat, 'Retrieval distance matrix before ranking')
     num_q, num_g = distmat.shape
     index = torch.argsort(distmat, dim=1) # from small to large
     index = index.numpy()
@@ -165,7 +185,14 @@ def evaluate(distmat, q_pids, g_pids, q_camids, g_camids):
 
     return CMC, mAP
 
+@torch.no_grad()
+@torch.cuda.amp.autocast(enabled=False)
+@torch.backends.cuda.sdp_kernel(enable_flash=False, enable_math=True, enable_mem_efficient=False)
 def test(model, queryloader, galleryloader, use_gpu, cfg, ranks=None):
+    # Both standalone test.py and Stage-2 evaluation use this scoped protocol.
+    # Context decorators restore the caller's AMP/SDPA/grad settings on errors too.
+    print_time('Evaluation protocol: ' + EVALUATION_PROTOCOL)
+    logging.getLogger('transreid.train').info('Evaluation protocol: %s', EVALUATION_PROTOCOL)
     if ranks is None:
         ranks = [1, 5, 10, 20]
     since = time.time()

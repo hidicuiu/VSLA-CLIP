@@ -3,7 +3,7 @@ from config import cfg
 import argparse
 from datasets.make_video_dataloader import make_dataloader
 from model.make_model_clipvideoreid_reidadapter_pbp import make_model
-from utils.test_video_reid import test
+from utils.test_video_reid import test, EVALUATION_PROTOCOL
 from utils.logger import setup_logger
 
 
@@ -48,6 +48,7 @@ def run_evaluation(config, config_file='', arguments=None):
             logger.info('Evaluation direction: %s; checkpoint: %s',
                         direction.upper() if is_ag else current.DATASETS.NAMES,
                         current.TEST.WEIGHT)
+            logger.info('Evaluation protocol: %s', EVALUATION_PROTOCOL)
             if config_file:
                 logger.info('Loaded configuration file %s', config_file)
                 with open(config_file, 'r') as handle:

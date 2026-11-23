@@ -4,6 +4,9 @@ import numpy as np
 
 from .clip.model import ResidualAttentionBlock, LayerNorm
 from .clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from .multihead_frame_aggregation import (
+    CONDITIONAL_MODES, MultiHeadFrameAggregation, validate_frame_aggregation_config)
+from .conditional_frame_aggregation import ConditionalFrameAggregation
 
 _tokenizer = _Tokenizer()
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
@@ -113,11 +116,35 @@ class build_transformer(nn.Module):
             print("not use learnable prompt")
             self.prompt_learner = PromptLearner_base(num_classes, clip_model.dtype, clip_model.token_embedding)
         self.text_encoder = TextEncoder(clip_model)
+        validate_frame_aggregation_config(cfg)
+        self.frame_aggregation_mode = cfg.MODEL.FRAME_AGGREGATION
+        if self.frame_aggregation_mode != 'mean':
+            # New initialization must not change Stage-2 sampling RNG streams.
+            with torch.random.fork_rng(devices=[]):
+                if self.frame_aggregation_mode in CONDITIONAL_MODES:
+                    self.frame_aggregation = ConditionalFrameAggregation(
+                        num_classes=num_classes,
+                        hidden_dim=cfg.MODEL.FRAME_AGGREGATION_HIDDEN_DIM,
+                        mode=self.frame_aggregation_mode,
+                        suppression=cfg.MODEL.FRAME_AGGREGATION_SUPPRESSION,
+                        gate_init=cfg.MODEL.FRAME_AGGREGATION_GATE_INIT)
+                else:
+                    self.frame_aggregation = MultiHeadFrameAggregation(
+                        heads=cfg.MODEL.FRAME_AGGREGATION_HEADS,
+                        hidden_dim=cfg.MODEL.FRAME_AGGREGATION_HIDDEN_DIM,
+                        mode=self.frame_aggregation_mode,
+                        groups=cfg.MODEL.FRAME_AGGREGATION_GROUPS)
 
 
 
     def forward(self, x = None, label=None, get_image = False, get_text = False,
-                get_frame_image=False, cam_label= None, view_label=None):
+                get_frame_image=False, cam_label= None, view_label=None,
+                return_aggregation_aux=False, use_mean_readout=False):
+        if use_mean_readout:
+            if self.training:
+                raise ValueError('Mean-readout override is for evaluation-mode graph extraction only')
+            if get_image or get_frame_image or get_text or return_aggregation_aux:
+                raise ValueError('Mean-readout override requires the normal adapter/PBP video path')
         if get_text == True:
             prompts = self.prompt_learner(label) 
             text_features = self.text_encoder(prompts, self.prompt_learner.tokenized_prompts)
@@ -158,18 +185,30 @@ class build_transformer(nn.Module):
             img_feature = image_features[:, 0]
             img_feature_proj = image_features_proj[:, 0]
 
-        img_feature_last = einops.rearrange(img_feature_last, '(b t) d -> b t d', b=batch)
-        img_feature_last = torch.mean(img_feature_last, dim=1)
-        img_feature = einops.rearrange(img_feature, '(b t) d -> b t d', b=batch)
-        img_feature = torch.mean(img_feature, dim=1)
-        img_feature_proj = einops.rearrange(img_feature_proj, '(b t) d -> b t d', b=batch)
-        img_feature_proj = torch.mean(img_feature_proj, dim=1)
+        aggregation_aux = None
+        if self.frame_aggregation_mode == 'mean' or use_mean_readout:
+            img_feature_last = einops.rearrange(img_feature_last, '(b t) d -> b t d', b=batch)
+            img_feature_last = torch.mean(img_feature_last, dim=1)
+            img_feature = einops.rearrange(img_feature, '(b t) d -> b t d', b=batch)
+            img_feature = torch.mean(img_feature, dim=1)
+            img_feature_proj = einops.rearrange(img_feature_proj, '(b t) d -> b t d', b=batch)
+            img_feature_proj = torch.mean(img_feature_proj, dim=1)
+        else:
+            branches = tuple(einops.rearrange(feature, '(b t) d -> b t d', b=batch)
+                             for feature in (img_feature_last, img_feature, img_feature_proj))
+            (img_feature_last, img_feature, img_feature_proj), aggregation_aux = self.frame_aggregation(*branches)
 
         if self.training:
             feat = self.bottleneck(img_feature)
             feat_proj = self.bottleneck_proj(img_feature_proj)
             cls_score = self.classifier(feat)
             cls_score_proj = self.classifier_proj(feat_proj)
+            if return_aggregation_aux:
+                if aggregation_aux is None:
+                    raise ValueError('Aggregation auxiliary outputs require an enabled aggregation module')
+                return ([cls_score, cls_score_proj],
+                        [img_feature_last, img_feature, img_feature_proj],
+                        img_feature_proj, aggregation_aux)
             return [cls_score, cls_score_proj], [img_feature_last, img_feature, img_feature_proj], img_feature_proj
 
         else:
@@ -177,12 +216,21 @@ class build_transformer(nn.Module):
 
 
     def load_param(self, trained_path):
+        if self.frame_aggregation_mode != 'mean':
+            state = torch.load(trained_path, map_location='cpu')
+            state = {key.replace('module.', '', 1): value for key, value in state.items()}
+            self.load_state_dict(state, strict=True)
+            print('Loading complete aggregation model from {}'.format(trained_path))
+            return
         param_dict = torch.load(trained_path)
         for i in param_dict:
             self.state_dict()[i.replace('module.', '')].copy_(param_dict[i])
         print('Loading pretrained model from {}'.format(trained_path))
 
     def load_param_finetune(self, model_path):
+        if self.frame_aggregation_mode != 'mean':
+            self.load_param(model_path)
+            return
         param_dict = torch.load(model_path)
         for i in param_dict:
             self.state_dict()[i].copy_(param_dict[i])

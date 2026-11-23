@@ -1,0 +1,15 @@
+Edit the attached scientific architecture diagram. Preserve its overall layout, readable Chinese typography, pastel colors, the graph-to-sampler feedback arrow, frozen CLIP/trainable adapters distinction, all formulas, mean residual bypass, and test strip. This is a small connectivity correction, not a redesign.
+
+Critical edit in the orange panel:
+The upper weighted-pooling box already receives raw frame features from the long overhead feature bus. The lower weighted-pooling box currently only receives the alpha_2 weight arrow from the left, and is MISSING its visible raw-feature input.
+Add a small pale-blue input node labeled exactly “f_t” just ABOVE the LOWER “加权聚合 v₂” box. Draw a clear short downward arrow from this f_t node into the TOP edge of that lower pooling box. This repeated f_t symbol denotes the SAME original frame features shown at the left of the panel. Keep the left incoming α₂,t arrow unchanged. Fit the small f_t node neatly between the upper pooling equation and the lower pooling box, adjusting local spacing slightly if needed.
+Also label the existing overhead raw-feature bus entering the UPPER pooling box with “f_t”, making clear both pools use the same original feature input.
+Both pools must therefore have TWO inputs: their own learned alpha weights and original f_t values. Do not route a v₁ output into v₂, do not connect the raw-feature input to the Softmax output, and do not add any third attention head.
+
+Minor terminology correction in the green panel:
+Change the small box currently reading “同轨迹两种时间采样” to “同轨迹双视图特征”, to clarify these are encoded features obtained using two temporal samples of the same tracklet. Preserve its arrow to “时间一致性评估”.
+
+Preserve the bottom orange caption or expand it slightly to say:
+“两个头共用帧信息与上下文；f_mean 用于残差相加”
+Keep the output formula v = f_mean + F_fuse([v₁ ; v₂]).
+Retain all other content. No purple third loss, no teacher/student, no head-diversity objective. High-resolution sharp Chinese research diagram, opaque white background.

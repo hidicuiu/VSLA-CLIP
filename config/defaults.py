@@ -31,6 +31,17 @@ _C.MODEL.STAGE1_WEIGHT = ''
 # Opt-in validation for paired runs that must share the complete initial model.
 _C.MODEL.STAGE1_STRICT_LOAD = False
 
+# M3-ReID-inspired frame aggregation; mean preserves the original E4 path.
+_C.MODEL.FRAME_AGGREGATION = 'mean'  # mean / multihead / uniform_fusion / single_shared / conditional*
+_C.MODEL.FRAME_AGGREGATION_HEADS = 2
+_C.MODEL.FRAME_AGGREGATION_GROUPS = 1  # channel groups per head; 1 keeps legacy checkpoints
+_C.MODEL.FRAME_AGGREGATION_HIDDEN_DIM = 64
+_C.MODEL.FRAME_AGGREGATION_DIVERSITY_WEIGHT = 0.0
+# Opt-in primary/conditional-supplement pooling and matched controls.
+_C.MODEL.FRAME_AGGREGATION_HEAD_LOSS_WEIGHT = 0.0
+_C.MODEL.FRAME_AGGREGATION_SUPPRESSION = 0.5
+_C.MODEL.FRAME_AGGREGATION_GATE_INIT = 0.1
+
 _C.MODEL.FUSION_HEAD_NUM = 12
 _C.MODEL.FUSION_LAYER_NUM = 2
 _C.MODEL.ATT_TYPE = ['c2c', 'o2o']  # ['c2c', 'o2o', 'c2o', 'o2c']
@@ -172,7 +183,10 @@ _C.DATALOADER.DYNAMIC_DFGS_LOW_QUALITY_FRACTION = 0.20
 _C.DATALOADER.DYNAMIC_DFGS_SOFT_NEGATIVES = False
 _C.DATALOADER.DYNAMIC_DFGS_LOW_CANDIDATE_WEIGHT = 0.25
 _C.DATALOADER.DYNAMIC_DFGS_BATCH_SIZE = 8
-_C.DATALOADER.DYNAMIC_DFGS_NUM_WORKERS = 0
+_C.DATALOADER.DYNAMIC_DFGS_NUM_WORKERS = 8
+# native: use the training/retrieval aggregation; mean: bypass only the new
+# final aggregation for graph centers AND both temporal reliability views.
+_C.DATALOADER.DYNAMIC_DFGS_READOUT = 'native'  # native / mean
 _C.DATALOADER.DYNAMIC_DFGS_SAVE_GRAPHS = True
 # Keep graph extraction from consuming the training RNG streams in paired runs.
 _C.DATALOADER.DYNAMIC_DFGS_PRESERVE_RNG_STATE = False

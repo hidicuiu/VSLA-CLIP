@@ -1,0 +1,63 @@
+Use case: infographic-diagram / scientific-educational
+Asset type: A high-resolution Chinese machine-learning research architecture diagram, redrawn from the attached low-resolution reference. This is a substantive architecture correction, not mere image enlargement.
+
+Create ONE polished landscape scientific figure on a pure white opaque background, ideally 3840 x 2160. Use the reference only for its soft pastel blue/green/orange visual vocabulary. Redraw all text and shapes sharply; generous whitespace, black readable Chinese sans-serif labels, orderly orthogonal arrows. Very readable at presentation scale. Rounded rectangles, thin borders, no shadows or decoration. This figure describes the CURRENT IMPLEMENTED TWO-INNOVATION dual_mean_graph model, not a proposed third loss.
+
+Top title, exact Chinese:
+“时间一致性动态采样与双头自适应帧聚合”
+Subtitle:
+“dual_mean_graph：均值构图，双头聚合用于训练与测试”
+
+Overall composition: a large upper green TRAINING-ONLY feedback loop, a middle main left-to-right feature path, a lower small test path. The orange aggregation panel must occupy the largest area, about 45% of the width. Carefully distinguish feature arrows from sampling feedback. Use black solid arrows for normal feature flow; green dashed arrows for graph updates / identity sampling feedback. Do not run the graph as a serial feature transformation between the encoder and the aggregation panel.
+
+MAIN MIDDLE ROW, left-to-right:
+A. A small blue panel “空中／地面视频” with two schematic video frame stacks (a pedestrian seen from a drone and ground camera, stylized thumbnails are sufficient).
+B. “训练采样器” panel, sublabel “依据困难身份图选择身份”.
+C. Blue “帧特征提取网络” panel. Inside, a block labeled “CLIP 视觉主干” with a small snowflake and sublabel “冻结”; beneath it a contrasting smaller block “IFA / CFAA / PBP” with sublabel “可训练”. Both belong to the SAME encoder, not separate serial models. Show the original CFAA is retained. Do not mark the entire network frozen.
+D. A small vertical stack labeled “帧特征 {f_t}”.
+E. Large orange panel “创新点2：双头自适应帧聚合与残差融合”.
+F. Final video feature “视频表示 v”.
+G. A blue training endpoint “原有训练目标”, three brief labels “身份分类”, “Triplet”, “图文相关”. Optionally simple formula “L_id + L_tri + L_vl” for schematic shorthand. No new loss or third innovation.
+
+UPPER GREEN PANEL:
+Title “创新点1：时间一致性驱动的动态困难身份采样（仅训练）”.
+The input video pool A has a green dashed arrow upwards into this panel, labeled “周期性全训练集前向”.
+First block “当前网络（共享参数）” with small sublabel “构图采用均值读出”.
+Then TWO parallel information blocks feeding one small node-edge identity graph:
+1. “均值视频特征” (for identity similarity).
+2. “同轨迹两种时间采样” → “时间一致性评估” (for reliability).
+Then “可靠性筛选” and a small identity graph labeled “动态困难身份图”.
+A clearly visible green dashed return arrow from this identity graph travels BACK to B “训练采样器”, labeled “更新身份邻居”.
+There must NOT be any feature arrow from the identity graph into the orange aggregation panel. The upper network shares the current encoder parameters; it is not a teacher network and not a separate pretrained model.
+
+ORANGE PANEL INTERNAL DETAILS — PRIORITY FOR SCIENTIFIC ACCURACY:
+Both attention heads receive the SAME input frame information and the SAME shared video context. Do not wire head 1 only to f_t and head 2 only to f_mean. There is no diversity/complementarity assumption.
+Arrange a common input construction on the left, two heads stacked in the center, then concatenate/fuse/add on the right. A bottom residual bypass should be very clear.
+- From {f_t}, make a small processing block “特征编码” outputting “e_t”.
+- From e_t, take a branch through “时间平均” to “视频上下文 c”. Show formula “c = mean_t(e_t)”.
+- Concatenate e_t and c into a block “[e_t ; c]” / “共同评分输入”.
+- A common “共享评分网络” fans out to TWO distinct head boxes:
+  upper “注意力头1” with “Softmax → α₁,t”
+  lower “注意力头2” with “Softmax → α₂,t”.
+  If space is limited, shared scoring network may be merged into common-input processing, but both heads must visibly share the same input.
+- To the right of EACH head, a separate “加权聚合” block produces “v₁” or “v₂”.
+- A separate raw frame feature bus from the original {f_t} splits and connects to BOTH weighted pooling blocks. These are VALUE/feature input arrows, while α head outputs supply the weights. This must be visible: both heads pool original frame features.
+- Small equations below respective pools: “v₁ = Σ_t α₁,t f_t” and “v₂ = Σ_t α₂,t f_t”.
+- v₁ and v₂ go to a concatenate circle or block “拼接”, then “融合网络 F_fuse”, then a circled “＋”.
+- From the ORIGINAL {f_t}, a separate BOTTOM bypass goes through “均匀平均” labeled “f_mean = mean_t(f_t)” and enters the same final circled “＋”. This is the residual feature baseline. f_mean is not the sole input of head 2.
+- The circled plus outputs v.
+- At bottom of orange panel, exact formula “v = f_mean + F_fuse([v₁ ; v₂])”.
+- Add a tiny clarifying caption: “c 用于评分；f_mean 用于残差相加”.
+- Two heads have no assigned fixed semantics like modality 1/2, clear/blur, primary/supplemental. Do not show a diversity loss or head supervision.
+For readability, the three original feature branches can be abstracted into the symbol f_t. Do not add a third branch or pretend to reproduce full Q/K/V Transformer self-attention.
+
+LOWER TEST ROW:
+A slim blue-gray rounded strip “测试流程”.
+Show a simple left-to-right pipeline:
+“单条视频” → “同一帧特征提取网络” → “同一双头聚合模块” → “视频表示” → “余弦相似度检索”.
+Small note “测试时不使用困难身份图”.
+A small legend: “实线：特征流动    绿色虚线：训练采样反馈”.
+
+Constraints:
+No purple set-matching contrastive loss panel. No third innovation. No teacher/student. No diversity supervision. No separate per-head classifiers.
+All arrows must have deliberate destinations and legible arrowheads. No unlabeled dangling arrows. Avoid unnecessary arrow crossings, use shared junctions and routed feature buses. Distinguish the two means c and f_mean. Prioritize accurate connectivity and Chinese text over decorative thumbnails. Keep the orange module and green feedback loop clearly separated.

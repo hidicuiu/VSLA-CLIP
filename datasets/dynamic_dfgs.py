@@ -779,6 +779,12 @@ def _refresh_dynamic_dfgs_graph(cfg, model, sampler, epoch, logger):
     """Extract current-model tracklets, rebuild the graph, and update sampler."""
     if not hasattr(sampler, "update_neighbor_graph"):
         raise TypeError("Dynamic DFGS requires IdentityBatchSamplerVideo")
+    graph_readout = cfg.DATALOADER.DYNAMIC_DFGS_READOUT
+    if graph_readout not in ('native', 'mean'):
+        raise ValueError('DYNAMIC_DFGS_READOUT must be native or mean')
+    # One per-call override is shared by the center clip and both reliability
+    # views. Never change the persistent training/retrieval aggregation mode.
+    graph_kwargs = {'use_mean_readout': True} if graph_readout == 'mean' else {}
     train_data = sampler.data_source
     transform = ST.Compose([
         ST.Scale(cfg.INPUT.SIZE_TEST, interpolation=3),
@@ -847,6 +853,8 @@ def _refresh_dynamic_dfgs_graph(cfg, model, sampler, epoch, logger):
         drop_last=False)
 
     base_model = _unwrap_model(model)
+    if graph_readout == 'mean' and not hasattr(base_model, 'frame_aggregation_mode'):
+        raise TypeError('Mean graph readout requires explicit video-aggregation support')
     was_training = model.training
     model.eval()
     all_tracklet_features = []
@@ -857,8 +865,10 @@ def _refresh_dynamic_dfgs_graph(cfg, model, sampler, epoch, logger):
     all_frame_counts = []
     all_indices = []
     logger.info(
-        "Refreshing dynamic DFGS-V graph at epoch %d (%d tracklets, quality_weighted=%s, reliable_negatives=%s)",
-        epoch, len(feature_dataset), quality_weighted, reliable_negatives)
+        "Refreshing dynamic DFGS-V graph at epoch %d (%d tracklets, quality_weighted=%s, reliable_negatives=%s, readout=%s)",
+        epoch, len(feature_dataset), quality_weighted, reliable_negatives, graph_readout)
+    logger.info('Dynamic DFGS readout=%s applies to identity-center clips and both temporal views; '
+                'training/retrieval aggregation is not changed', graph_readout)
     try:
         with torch.no_grad():
             for step, batch in enumerate(loader, start=1):
@@ -875,16 +885,17 @@ def _refresh_dynamic_dfgs_graph(cfg, model, sampler, epoch, logger):
                 view_labels = camids if cfg.MODEL.PBP_VIEW else None
                 with torch.cuda.amp.autocast(enabled=True):
                     tracklet_features = base_model(
-                        clips, cam_label=camera_labels, view_label=view_labels)
+                        clips, cam_label=camera_labels, view_label=view_labels,
+                        **graph_kwargs)
                     if quality_weighted:
                         frame_features = base_model(clips, get_frame_image=True)
                     if reliable_negatives:
                         first_features = base_model(
                             first_view, cam_label=camera_labels,
-                            view_label=view_labels)
+                            view_label=view_labels, **graph_kwargs)
                         second_features = base_model(
                             second_view, cam_label=camera_labels,
-                            view_label=view_labels)
+                            view_label=view_labels, **graph_kwargs)
                 all_tracklet_features.append(tracklet_features.float().cpu())
                 if quality_weighted:
                     all_reliabilities.append(
@@ -1160,6 +1171,10 @@ def _refresh_dynamic_dfgs_graph(cfg, model, sampler, epoch, logger):
                 "reliable_negatives": reliable_negatives,
                 "num_tracklets": len(train_data),
                 "num_identities": num_identities,
+                "graph_feature_readout": graph_readout,
+                "graph_feature_stage": "post_adapter_pre_bn",
+                "graph_feature_dimension": int(tracklet_features.shape[1]),
+                "temporal_reliability_readout": graph_readout if reliable_negatives else None,
                 "soft_negatives": soft_negatives,
                 "random_matched_filter": random_matched_filter,
                 "random_filter_match_candidate_impact": match_candidate_impact,
