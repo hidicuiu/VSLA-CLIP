@@ -52,6 +52,15 @@ def make_dataloader(cfg):
         batch_size=cfg.SOLVER.STAGE1.IMS_PER_BATCH, num_workers=num_workers,
         pin_memory=True, drop_last=True)
 
+    if cfg.MODEL.CROSS_PLATFORM_SET_WEIGHT:
+        mapping = tuple(cfg.MODEL.CROSS_PLATFORM_SET_CAMERA_TO_PLATFORM)
+        if hasattr(dataset, 'camera_to_platform') and mapping != tuple(dataset.camera_to_platform):
+            raise ValueError('Set-loss camera mapping disagrees with dataset platform metadata')
+        cameras = {int(camera) for _, _, camera in dataset.train}
+        if any(camera < 0 or camera >= len(mapping) for camera in cameras):
+            raise ValueError('Set-loss platform mapping does not cover training cameras')
+        if {mapping[camera] for camera in cameras} != {0, 1}:
+            raise ValueError('Set-loss training data must contain both platforms')
     stage2_sampler = _make_stage2_sampler(cfg, dataset.train)
     train_loader_stage2 = DataLoader(
         VideoDataset(

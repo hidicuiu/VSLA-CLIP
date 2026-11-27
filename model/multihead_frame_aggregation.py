@@ -15,6 +15,8 @@ CONDITIONAL_MODES = ('conditional', 'conditional_independent', 'conditional_sing
 
 
 def validate_frame_aggregation_config(cfg):
+    from loss.cross_platform_set import validate_set_loss_config
+    validate_set_loss_config(cfg)
     mode = cfg.MODEL.FRAME_AGGREGATION
     weight = cfg.MODEL.FRAME_AGGREGATION_DIVERSITY_WEIGHT
     groups = cfg.MODEL.FRAME_AGGREGATION_GROUPS
@@ -194,9 +196,12 @@ class MultiHeadFrameAggregation(nn.Module):
                 # deliberately inactive in this uniform-weight control.
                 weights = torch.full_like(logits, 1.0 / frames)
             outputs = []
+            pooled_branches = []
             for feature, mean, fusion in zip(branches, means, self.fusions):
                 head_features = self.pool_heads(feature, weights)
+                pooled_branches.append(head_features)
                 correction = fusion(head_features.flatten(1))
                 outputs.append((mean.float() + correction).to(dtype=mean.dtype))
             auxiliary = dict(diversity_loss=attention_diversity(weights), weights=weights)
+            auxiliary['set_features'] = torch.cat((pooled_branches[1], pooled_branches[2]), dim=-1)
         return tuple(outputs), auxiliary

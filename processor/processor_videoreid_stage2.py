@@ -10,6 +10,7 @@ import torch.distributed as dist
 from torch.nn import functional as F
 from loss.supcontrast import SupConLoss
 from loss.frame_head_supervision import FrameHeadSupervision
+from loss.cross_platform_set import CrossPlatformSetLoss, validate_set_loss_config
 import einops
 
 from utils.test_video_reid import test, _eval_format_logger
@@ -45,6 +46,21 @@ def do_train_stage2(cfg,
     diversity_weight = cfg.MODEL.FRAME_AGGREGATION_DIVERSITY_WEIGHT
     head_loss_weight = cfg.MODEL.FRAME_AGGREGATION_HEAD_LOSS_WEIGHT
     head_criterion = FrameHeadSupervision(cfg) if head_loss_weight else None
+    validate_set_loss_config(cfg)
+    set_weight = cfg.MODEL.CROSS_PLATFORM_SET_WEIGHT
+    set_criterion = CrossPlatformSetLoss(
+        cfg.MODEL.CROSS_PLATFORM_SET_TEMPERATURE,
+        cfg.MODEL.CROSS_PLATFORM_SET_MATCHING) if set_weight else None
+    platform_map = None
+    if set_criterion is not None:
+        mapping = cfg.MODEL.CROSS_PLATFORM_SET_CAMERA_TO_PLATFORM
+        dataset = train_loader_stage2.dataset
+        observed_cameras = {int(camera) for _, _, camera in dataset.dataset}
+        if any(camera < 0 or camera >= len(mapping) for camera in observed_cameras):
+            raise ValueError('Set platform mapping does not cover training cameras')
+        platform_map = torch.tensor(mapping, dtype=torch.long, device=device)
+        logger.info('Cross-platform set contrast: weight=%g temperature=%g matching=%s camera-map=%s',
+                    set_weight, set_criterion.temperature, set_criterion.matching, mapping)
     if aggregation_enabled:
         logger.info('Frame aggregation: training/retrieval=%s heads=%d groups=%d diversity-weight=%.4f; '
                     'dynamic DFGS center/reliability readout=%s',
@@ -74,6 +90,8 @@ def do_train_stage2(cfg,
             num_classes = model.num_classes
 
     loss_meter = AverageMeter()
+    set_meters = {name: AverageMeter() for name in (
+        'loss', 'valid_fraction', 'positive_count', 'swap_fraction', 'matching_gap', 'head_cosine')}
     diversity_meter = AverageMeter()
     entropy_meter = AverageMeter()
     max_weight_meter = AverageMeter()
@@ -131,6 +149,8 @@ def do_train_stage2(cfg,
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         loss_meter.reset()
+        for meter in set_meters.values():
+            meter.reset()
         diversity_meter.reset()
         entropy_meter.reset()
         max_weight_meter.reset()
@@ -150,6 +170,8 @@ def do_train_stage2(cfg,
 
         model.train()
         for n_iter, (img, vid, target_cam) in enumerate(train_loader_stage2):
+            # Preserve raw camera metadata even when camera prompts are disabled.
+            platforms = platform_map[target_cam.to(device)] if platform_map is not None else None
             # print(model.prompt_learner.text_shared_prompts[0])
             # TODO
             target_view = target_cam
@@ -180,6 +202,12 @@ def do_train_stage2(cfg,
                 loss_t2i = xent(text_feature, image_features, target, target)
                 logits = image_features @ text_features.t()
                 loss = loss_fn(score, feat, target, target_cam, logits, loss_t2i, loss_i2t)
+                if set_criterion is not None:
+                    contrast_features = (torch.cat((feat[1], feat[2]), dim=-1).unsqueeze(1)
+                                         if set_criterion.matching == 'fused'
+                                         else aggregation_aux['set_features'])
+                    set_loss, set_details = set_criterion(contrast_features, target, platforms)
+                    loss = loss + set_weight * set_loss
                 if aggregation_enabled and diversity_weight:
                     loss = loss + diversity_weight * aggregation_aux['diversity_loss'].mean()
                 if head_criterion is not None:
@@ -202,6 +230,10 @@ def do_train_stage2(cfg,
             acc = (logits.max(1)[1] == target).float().mean()
 
             loss_meter.update(loss.item(), img.shape[0])
+            if set_criterion is not None:
+                set_meters['loss'].update(float(set_loss.detach()), img.shape[0])
+                for name, value in set_details.items():
+                    set_meters[name].update(float(value), img.shape[0])
             if aggregation_enabled:
                 weights = aggregation_aux['weights'].detach().float()
                 diversity_meter.update(float(aggregation_aux['diversity_loss'].detach().mean()), img.shape[0])
@@ -222,6 +254,20 @@ def do_train_stage2(cfg,
                             .format(epoch, (n_iter + 1), len(train_loader_stage2),
                                     loss_meter.avg, acc_meter.avg, scheduler.get_lr()[0]))
 
+        if set_criterion is not None:
+            if set_criterion.matching == 'fused':
+                logger.info('Fused cross-platform SupCon epoch means: loss=%.6f valid-fraction=%.4f '
+                            'positives=%.3f weight=%.4f; head matching diagnostics not applicable',
+                            set_meters['loss'].avg, set_meters['valid_fraction'].avg,
+                            set_meters['positive_count'].avg, set_weight)
+            else:
+                logger.info('Set contrast epoch means: loss=%.6f valid-fraction=%.4f positives=%.3f '
+                            'positive-swap-fraction=%.4f matching-gap=%.6f head-cosine=%.6f weight=%.4f',
+                            *(set_meters[name].avg for name in (
+                                'loss', 'valid_fraction', 'positive_count', 'swap_fraction', 'matching_gap', 'head_cosine')),
+                            set_weight)
+            if set_meters['valid_fraction'].avg == 0:
+                logger.warning('No valid cross-platform anchors this epoch; set loss supplied no supervision')
         if aggregation_enabled:
             logger.info('Frame aggregation epoch means: cosine-head-overlap=%.6f entropy=%.6f '
                         'max-weight=%.6f diversity-weight=%.4f',
